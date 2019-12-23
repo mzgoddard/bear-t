@@ -1,0 +1,12 @@
+{
+  "name": "bear-t",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "Michael \"Z\" Goddard <mzgoddard@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^12.12.21",
+    "ts-node": "^8.5.4",
+    "typescript": "^3.7.4"
+  }
+}
