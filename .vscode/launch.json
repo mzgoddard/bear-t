@@ -11,7 +11,7 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "args": ["${workspaceRoot}/src/predicate.ts"],
+            "args": ["${workspaceRoot}/src/predicate2.ts"],
             "runtimeArgs": ["-r", "ts-node/register"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
