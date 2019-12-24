@@ -42,7 +42,7 @@ class FieldSet {
         return this.values[index];
     }
 
-    write(key: string | Arg, value: any) {
+    write(key: string | ArgImplementation | Arg & {write(): void}, value: any) {
         if (!this.changed) {
             this.values = this.values.slice();
             this.changed = true;
@@ -58,14 +58,7 @@ class FieldSet {
     property(key: string) {
         return {
             get() {
-                const value = this.read(key);
-                if (value instanceof Arg) {
-                    const argValue = value.read();
-                    if (argValue !== null) {
-                        return argValue;
-                    }
-                }
-                return value;
+                return this.read(key);
             },
             set(value) {
                 return this.write(key, value);
@@ -128,16 +121,18 @@ const sentinel = new ThreadFrame(null, null, null);
 class Thread {
     fields: FieldSet;
     frame: ThreadFrame;
-    backtrack: Pick<Thread, 'fields' | 'frame' | 'backtrack'>;
+    previous: ThreadFrame;
+    backtrack: Pick<Thread, 'fields' | 'frame' | 'previous' | 'backtrack'>;
 
     constructor(scope: {[key: string]: any}, main: Predicate) {
-        this.backtrack = {fields: null, frame: null, backtrack: null};
+        this.backtrack = {fields: null, frame: null, previous: null, backtrack: null};
         this.fields = new FieldSet(main.scopeMap, scope);
         this.frame = new ThreadFrame(main);
+        this.previous = sentinel;
     }
 
     ifThen(pred: Predicate) {
-        this.frame = new ThreadFrame(this.frame.predicate, new ThreadFrame(pred, this.frame.next, this.frame), this.frame.after);
+        this.frame.next = new ThreadFrame(pred, this.frame.next);
     }
 
     elseThen(pred: Predicate) {
@@ -145,15 +140,19 @@ class Thread {
         this.fields = this.fields.clone();
         this.backtrack = {
             fields,
-            frame: new ThreadFrame(this.frame.predicate, new ThreadFrame(pred, this.frame.next, this.frame), this.frame.after),
+            frame: new ThreadFrame(pred, this.frame.next),
+            previous: new ThreadFrame(this.frame.predicate, this.previous),
             backtrack: this.backtrack,
         };
     }
 
     again(pred: Predicate) {
+        const fields = this.fields;
+        this.fields = this.fields.clone();
         this.backtrack = {
-            fields: this.fields.clone(),
-            frame: new ThreadFrame(pred, this.frame.next, this.frame.after),
+            fields,
+            frame: new ThreadFrame(pred, this.frame.next),
+            previous: this.previous,
             backtrack: this.backtrack,
         };
     }
@@ -170,14 +169,15 @@ class Thread {
     async run() {
         if (!this.frame.predicate) {
             this.rewind();
-            this.frame = this.frame.next;
         }
         while (this.frame.predicate) {
             const result = await this.frame.predicate.call(this.fields, this);
             if (result === false) {
                 this.rewind();
+            } else {
+                this.previous = new ThreadFrame(this.frame.predicate, this.previous);
+                this.frame = this.frame.next;
             }
-            this.frame = this.frame.next;
         }
         return this.fields.result();
     }
@@ -205,6 +205,22 @@ function popScope(thread: Thread) {
 }
 function andFunc() {return true;}
 function orFunc() {return true;}
+function set(scope) {
+    const value = scope.right instanceof Arg && scope.right.value !== null ? scope.right.value : scope.right;
+    if (scope.left instanceof Arg) {
+        const left: Arg = scope.left;
+        if (left.isNull()) {
+            left.write(value);
+            return true;
+        }
+        return false;
+    }
+    else scope.left = value;
+}
+function replace(scope) {
+    scope.left = scope.right;
+    return true;
+}
 
 type PredicateArgs = (
     [PredicateContext, boolean | PredicateFunction] |
@@ -274,15 +290,18 @@ type BindArg = Arg | string | number | boolean | symbol | BindArg[] | {[key in s
 type StaticArg = string | number | boolean | symbol | StaticArg[] | {[key in string | number]: StaticArg};
 type ObjectArg = StaticArg[] | {[key in string | number]: StaticArg};
 
-class Arg {
-    name: string;
-    value: any = null;
+interface WriteableArg {
+    write(value: any): void;
+}
 
-    fields: FieldSet = null;
-    thread: Thread;
+abstract class Arg {
+    readonly name: string;
 
-    _args: StrictArgSet;
-    _normal: ObjectArg;
+    protected fields: FieldSet = null;
+    protected readonly thread: Thread;
+
+    protected readonly _args: StrictArgSet;
+    protected readonly _normal: ObjectArg;
 
     constructor(name: string);
     constructor(name: string, thread: Thread);
@@ -298,57 +317,44 @@ class Arg {
                 this.name = arg0;
                 this.thread = arg1;
             } else if (typeof arg0 !== 'string' && !(arg1 instanceof Thread)) {
-                this.initObjectValue(arg0, arg1);
+                this._args = arg0;
+                this._normal = arg1;
+                this.initObjectValue();
             }
         } else {
-            let _args: StrictArgSet;
-            let _normal: ObjectArg;
-            [this.name, _args, _normal, this.thread] = args;
-            this.initObjectValue(_args, _normal);
+            [this.name, this._args, this._normal, this.thread] = args;
+            this.initObjectValue();
         }
     }
 
-    initObjectValue(args: StrictArgSet, normal: ObjectArg) {
-        this._args = args;
-        this._normal = normal;
-        if (Array.isArray(args) || Array.isArray(normal)) {
-            
+    abstract get value(): any;
+
+    isNull(): this is WriteableArg {
+        return this.fields === null || this.fields.read(this) === null;
+    }
+
+    initObjectValue() {
+        const {_args: args, _normal: normal} = this;
+        if (Array.isArray(args) && Array.isArray(normal)) {
+            const value: (Arg | StaticArg)[] = normal.slice();
+            for (let i = 0; i < value.length; i++) {
+                if (args[i]) value[i] = args[i];
+            }
+            if (this.thread && this.isNull()) this.write(value);
         } else {
-            const argsCopy = {...args};
-            this.value = {...normal};
+            const value = {...normal, ...args};
             for (const key in args) {
-                argsCopy[key] = args[key].clone(this.thread);
-                Object.defineProperty(this.value, key, {
-                    get() {
-                        return argsCopy[key].read();
-                    },
-                    set(value) {
-                        argsCopy[key].write(value);
-                    },
-                });
+                value[key] = args[key].clone(this.thread);
             }
+            if (this.thread && this.isNull()) this.write(value);
         }
-    }
-
-    read() {
-        if (this.value) return this.value;
-        if (this.fields) return this.fields.read(this);
-        return null;
-    }
-
-    write(value: any) {
-        if (this.value !== null || this.fields !== null && this.fields.read(this) !== null) {
-            throw new Error('Cannot write to an already set argument. It must be cleared while backtracking.');
-        }
-        this.fields = this.thread.fields;
-        this.fields.write(this, value);
     }
 
     clone(thread?: Thread): Arg {
         if (this._args) {
-            return new Arg(this.name, this._args, this._normal, thread);
+            return new ArgImplementation(this.name, this._args, this._normal, thread);
         }
-        return new Arg(this.name, thread);
+        return new ArgImplementation(this.name, thread);
     }
 
     static bind(arg: BindArg): Arg | StaticArg;
@@ -362,7 +368,7 @@ class Arg {
             [name, arg] = args;
         }
 
-        if (arg instanceof Arg) {
+        if (arg instanceof ArgImplementation) {
             return arg.clone();
         } else if (Array.isArray(arg)) {
             let args: Arg[];
@@ -378,7 +384,7 @@ class Arg {
                 }
             }
             if (args) {
-                return new Arg(name, args, normal);
+                return new ArgImplementation(name, args, normal);
             } else {
                 return normal;
             }
@@ -396,7 +402,7 @@ class Arg {
                 }
             }
             if (args) {
-                return new Arg(name, args, normal);
+                return new ArgImplementation(name, args, normal);
             } else {
                 return normal;
             }
@@ -405,20 +411,37 @@ class Arg {
     }
 }
 
-class AnonymousArg extends Arg {
+class ArgImplementation extends Arg implements WriteableArg {
+    get value() {
+        if (this.fields) return this.fields.read(this);
+        return null;
+    }
+
+    write(value: any): void {
+        if (this.isNull()) {
+            this.fields = this.thread.fields;
+            this.fields.write(this, value);
+        } else {
+            throw new Error('Cannot write to an already set argument. It must be cleared while backtracking.');
+        }
+    }
+}
+
+class AnonymousArg extends ArgImplementation {
     constructor(name: string = 'anonymous') {
         super(name);
     }
-    read() {}
-    write() {}
-    clone() {
+    get value() {return null;}
+    write(value: any): void {}
+    isNull(): this is WriteableArg {return true;}
+    clone(): Arg {
         return new AnonymousArg(this.name);
     }
 }
 
 interface ArgFactory {};
 interface ProxyArgs extends ArgFactory {
-    bind: (arg: any) => Arg;
+    bind: (arg: any) => ArgImplementation;
 }
 
 const Args = new Proxy<{[key: string]: Arg}>({
@@ -427,7 +450,7 @@ const Args = new Proxy<{[key: string]: Arg}>({
     get(target, property) {
         if (typeof property === 'string') {
             if (!target[property]) {
-                return new Arg(property, null);
+                return new ArgImplementation(property, null);
             }
             return target[property];
         }
@@ -439,7 +462,7 @@ function match(scope: Scope & {a: any, b: any}) {
 }
 function write(obj: Arg | StaticArg) {
     return (scope: Scope, thread: Thread) => {
-        scope.a = obj instanceof Arg ? obj.clone(thread) : obj;
+        scope.a = obj instanceof ArgImplementation ? obj.clone(thread) : obj;
         return true;
     };
 }
@@ -488,28 +511,31 @@ assert.throws = (f, e_ = Error, msg: string = `${f.name} throws ${e_} (${assertL
 {
     console.log('Arg');
     const t = new Thread({}, new Predicate({args: {}}, true));
-    const arg = new Arg('arg', null);
-    assert.equals(arg.read(), null);
-    assert.throws(() => arg.write('value'));
-    const argt = new Arg('argt', t);
+    t.elseThen(new Predicate({}, true));
+    const arg = new ArgImplementation('arg', null);
+    assert.equals(arg.value, null);
+    assert.throws(() => (arg.write('value')));
+    const argt = new ArgImplementation('argt', t);
     argt.write('value');
-    assert.throws(() => argt.write('value'));
-    assert.equals(argt.read(), 'value');
+    assert.throws(() => (argt.write('value')));
+    assert.equals(argt.value, 'value');
     assert.equals(t.fields.read(argt), 'value');
-    const arg2 = new Arg('2', t);
-    pushScope({}, t);
+    const arg2 = new ArgImplementation('2', t);
+    // pushScope({}, t);
     arg2.write('2');
     // console.log(t.fields);
     t.elseThen(new Predicate({}, true));
     // console.log(t.fields);
-    assert.equals(arg2.read(), '2');
-    pushScope({}, t);
-    assert.equals(arg2.read(), '2');
+    assert.equals(arg2.value, '2');
+    // pushScope({}, t);
+    assert.equals(arg2.value, '2');
     t.rewind();
     // console.log(t.fields);
-    assert.equals(arg2.read(), '2');
+    assert.equals(arg2.value, '2');
     t.rewind();
-    assert.equals(arg2.read(), null);
+    assert.equals(arg2.value, null);
+    arg2.write('3');
+    assert.equals(arg2.value, '3');
 }
 
 console.log('\n終わり');
