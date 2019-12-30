@@ -7,29 +7,36 @@ console.log('開始');
 type ScopeMap = Readonly<{[key: string]: string}>;
 type Scope = {[key: string]: any};
 
-class FieldSet {
+class FieldSet<SMap extends ScopeMap = ScopeMap, NextScope extends {[key in SMap[keyof SMap]]: any} = {[key in SMap[keyof SMap]]: any}, Scope = {[key in keyof SMap]: NextScope[Extract<SMap[key], keyof NextScope>]}> {
     readonly keys: Readonly<string[]>;
     readonly fromKeys: Readonly<string[]>;
     readonly extraKeys: (string | Arg)[] = [];
     values: any[];
-    readonly next: FieldSet;
+    readonly next: FieldSet<any, any, NextScope>;
 
     changed: boolean = false;
     isDestroyed: boolean = false;
 
-    constructor(map: ScopeMap, scope: {[key: string]: any});
-    constructor(map: ScopeMap, next: FieldSet);
-    constructor(keys: Readonly<string[]>, fromKeys: Readonly<string[]>, values: any[], next: FieldSet);
-    constructor(...args: [ScopeMap, {[key: string]: any}] | [ScopeMap, FieldSet] | [Readonly<string[]>, Readonly<string[]>, any[], FieldSet]) {
+    constructor(map: SMap, next: FieldSet<any, any, any>);
+    constructor(map: SMap, scope: Exclude<NextScope, FieldSet>);
+    constructor(keys: Readonly<Extract<keyof SMap, string>[]>, fromKeys: Readonly<Extract<SMap[keyof SMap], string>[]>, values: (NextScope[SMap[keyof SMap]])[], next: FieldSet<any, any, NextScope>);
+    constructor(...args: [SMap, FieldSet<any, any, NextScope>] | [SMap, Exclude<NextScope, FieldSet>] | [Readonly<Extract<keyof SMap, string>[]>, Readonly<Extract<SMap[keyof SMap], string>[]>, (NextScope[SMap[keyof SMap]])[], FieldSet<any, any, NextScope>]) {
         if (args.length === 2) {
-            const [map, next] = args;
-            this.keys = Object.keys(map);
-            this.fromKeys = Object.values(map);
+            let map: SMap;
+            let next: FieldSet<any, any, NextScope>;
+            let nextScope: NextScope;
+            if (args[1] instanceof FieldSet) {
+                [map, next] = args as [SMap, FieldSet<any, any, NextScope>];
+            } else {
+                [map, nextScope] = args as [SMap, NextScope];
+            }
+            this.keys = Object.keys(map) as Extract<keyof SMap, string>[];
+            this.fromKeys = Object.values(map) as Extract<SMap[keyof SMap], string>[];
             if (next instanceof FieldSet) {
                 this.values = this.fromKeys.map(key => next.read(key));
                 this.next = next;
             } else {
-                this.values = this.fromKeys.map(key => next[key]);
+                this.values = this.fromKeys.map(key => nextScope[key]);
                 this.next = null;
             }
         } else {
@@ -37,14 +44,21 @@ class FieldSet {
         }
     }
 
-    read(key: string | Arg) {
+    read<Key extends string | Arg>(key: Key): Key extends keyof Scope ? Scope[Key] : any {
         if (this.isDestroyed) return null;
         let index = typeof key === 'string' ? this.keys.indexOf(key) : this.extraKeys.indexOf(key);
         if (index === -1) index = this.extraKeys.indexOf(key, this.keys.length);
         return this.values[index];
     }
 
-    write(key: string | ArgImpl | Arg & {write(): void}, value: any) {
+    readFrom<Key extends string | Arg>(key: Key): Key extends keyof SMap ? NextScope[Extract<SMap[Key], keyof NextScope>] : any {
+        if (this.isDestroyed) return null;
+        let index = typeof key === 'string' ? this.keys.indexOf(key) : this.extraKeys.indexOf(key);
+        if (index === -1) index = this.extraKeys.indexOf(key, this.keys.length);
+        return this.values[index];
+    }
+
+    write<Key extends string | (Arg & {write(): void}) | ArgImpl, Value = Key extends keyof Scope ? Scope[Extract<Key, keyof Scope>] : any>(key: Key, value: Value) {
         if (!this.changed) {
             this.values = this.values.slice();
             this.changed = true;
@@ -57,27 +71,28 @@ class FieldSet {
         return this.values[index] = value;
     }
 
-    property(key: string) {
+    property<Key extends string>(key: Key) {
+        const _this = this;
         return {
             get() {
-                return this.read(key);
+                return _this.read(key);
             },
-            set(value) {
-                return this.write(key, value);
+            set(value: Key extends keyof Scope ? Scope[Key] : any) {
+                _this.write(key, value);
             },
         };
     }
 
-    remap(map: ScopeMap) {
-        const query = {};
+    remap<SubMap extends {[key: string]: Extract<keyof Scope, string>}>(map: SubMap): {[key in keyof SubMap]: Scope[Extract<SubMap[key], keyof Scope>]} {
+        const query: any = {};
         for (const key in map) {
             Object.defineProperty(query, key, this.property(map[key]));
         }
         return query;
     }
 
-    result() {
-        const answer = {};
+    result(): Scope {
+        const answer: any = {};
         for (const key of this.keys) {
             if (typeof key === 'string') {
                 answer[key] = this.read(key);
@@ -86,11 +101,11 @@ class FieldSet {
         return answer;
     }
 
-    clone() {
+    clone(): FieldSet<SMap, NextScope, Scope> {
         this.changed = false;
         const newFields = new FieldSet(this.keys, this.fromKeys, this.values, this.next);
         newFields.extraKeys.push(...this.extraKeys);
-        return newFields;
+        return newFields as FieldSet<any, any, any>;
     }
 
     push(map: ScopeMap, next: FieldSet) {
@@ -100,7 +115,7 @@ class FieldSet {
     pop() {
         const nextClone = this.next.clone();
         this.fromKeys.forEach((fromKey, index) => (
-            nextClone.write(fromKey, this.read(this.keys[index]))
+            nextClone.write(fromKey, this.read(this.keys[index]) as NextScope[Extract<typeof fromKey, keyof NextScope>])
         ));
         return nextClone;
     }
@@ -109,26 +124,24 @@ class FieldSet {
 class ThreadFrame {
     predicate: Predicate;
     next: ThreadFrame;
-    after: ThreadFrame;
 
-    constructor(predicate, next = sentinel, after = sentinel) {
+    constructor(predicate, next = sentinel) {
         this.predicate = predicate;
         this.next = next;
-        this.after = after;
     }
 }
 
-const sentinel = new ThreadFrame(null, null, null);
+const sentinel = new ThreadFrame(null, null);
 
 class Thread {
-    fields: FieldSet;
+    fields: FieldSet<any, any, any>;
     frame: ThreadFrame;
     previous: ThreadFrame;
     backtrack: Pick<Thread, 'fields' | 'frame' | 'previous' | 'backtrack'>;
 
-    constructor(scope: {[key: string]: any}, main: Predicate) {
+    constructor(scope: Scope, main: Predicate) {
         this.backtrack = {fields: null, frame: null, previous: null, backtrack: null};
-        this.fields = new FieldSet(main.scopeMap, scope);
+        this.fields = new FieldSet(scopeMapFromContext(Object.keys(scope)), scope);
         this.frame = new ThreadFrame(main);
         this.previous = sentinel;
     }
@@ -173,7 +186,7 @@ class Thread {
             this.rewind();
         }
         while (this.frame.predicate) {
-            const result = await this.frame.predicate.call(this.fields, this);
+            const result = await this.frame.predicate.call(this);
             if (result === false) {
                 this.rewind();
             } else {
@@ -188,7 +201,7 @@ class Thread {
 function pushScope(scopeMap: ScopeMap, thread: Thread): void {
     thread.fields = new FieldSet(scopeMap, thread.fields);
 }
-function popScope(scope: Scope, thread: Thread) {
+function popScope(thread: Thread) {
     thread.fields = thread.fields.pop();
     return true;
 }
@@ -267,10 +280,9 @@ function normalizeContext<PS, C extends PredicateContext>(context: C): Predicate
 function trueFunction() {return true;}
 function falseFunction() {return false;}
 function callNestedPredicate<P extends Predicate, S = P extends Predicate<infer PS> ? PS : Scope>(func: P): PredicateFunction<S> {
-    return (scope, thread) => {
+    return (thread) => {
         thread.ifThen(popScopePredicate);
         thread.ifThen(func);
-        pushScope(this.scopeMap, thread);
         return true;
     };
 };
@@ -285,7 +297,7 @@ function funcFromPredicateLike<F extends PredicateLike, S = F extends PredicateL
     return callNestedPredicate(func as Predicate<S>);
 }
 
-type PredicateFunction<S extends Scope = Scope> = (args: S, thread: Thread) => Promise<boolean> | boolean;
+type PredicateFunction<S extends Scope = Scope> = (thread: Thread & {fields: FieldSet<any, any, S>}) => Promise<boolean> | boolean;
 type PredicateLike<S extends Scope = Scope> = boolean | PredicateFunction<S> | Predicate<S>;
 
 type PredicateNameContext = string;
@@ -308,9 +320,11 @@ type PredicateNormContext<PS, SM extends ScopeMap = ScopeMap> = {
     right: Predicate<any>;
 };
 
-type PredicateArgs<C extends PredicateContext, S> = (
-    [C, boolean | PredicateFunction<S>] |
-    [C, Predicate<S>]
+type PredicateArgs<S, C = {}> = (
+    [boolean | PredicateFunction<S>] |
+    [boolean | PredicateFunction<S>, C] |
+    [Predicate<S>] |
+    [Predicate<S>, C]
 );
 
 type CArgsFrom<C extends PredicateContext> = C extends Readonly<string[]> ? C : C extends PredicateContext<infer Args> ? Args : {};
@@ -343,35 +357,30 @@ const t: {[key in (Readonly<typeof s>)[keyof (Readonly<typeof s>)]]: PickValues<
 // PS - ParentScope
 // SM - ScopeMap
 // S - Scope
-class Predicate<
-    PS extends {[key: string]: any} = any,
-    C extends PredicateContext = PredicateContext,
-    S = {[key in keyof ScopeFrom<PS, ScopeMapFrom<CArgsFrom<C>>>]: ScopeFrom<PS, ScopeMapFrom<CArgsFrom<C>>>[key]},
-    OS = {[key in keyof MergeScope<PS, S, ReverseMap<ScopeMapFrom<CArgsFrom<C>>>>]: MergeScope<PS, S, ReverseMap<ScopeMapFrom<CArgsFrom<C>>>>[key]}
-> {
+class Predicate<S = any, C = {}> {
     readonly func: PredicateFunction<S>;
-    readonly context: PredicateNormContext<PS, ScopeMapFrom<CArgsFrom<C>>>;
-    readonly scopeMap: ScopeMap;
+    readonly context: C;
 
-    constructor(context: C, func: boolean | PredicateFunction<S>);
-    constructor(context: C, func: Predicate<S>);
-    constructor(...args: PredicateArgs<C, S>);
-    constructor(...args: PredicateArgs<C, S>) {
-        const [context, func] = args;
+    constructor(func: boolean | PredicateFunction<S>);
+    constructor(func: boolean | PredicateFunction<S>, context: C);
+    constructor(func: Predicate<S>);
+    constructor(func: Predicate<S>, context: C);
+    constructor(...args: PredicateArgs<S, C>);
+    constructor(...args: PredicateArgs<S, C>) {
+        const [func, context] = args;
         this.func = funcFromPredicateLike(func);
-        this.context = normalizeContext(context);
-        this.scopeMap = this.context.args;
+        this.context = context;
     }
 
-    call(fields: FieldSet, thread: Thread) {
-        return this.func.call(this, fields.remap(this.scopeMap), thread);
+    call(thread: Parameters<Predicate<S, C>['func']>[0]) {
+        return this.func.call(this.context, thread);
     }
 
-    and<RPS = OS, C2 extends PredicateContext = PredicateContext, S2 = {[key in keyof ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>]: ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>[key]}, ROS = {[key in keyof MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>]: MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>[key]}>(context: C2, func: boolean | PredicateFunction<S2>): Predicate<PS, PredicateAndContext, {}, ROS>;
-    and<RPS = OS, C2 extends PredicateContext = PredicateContext, S2 = {[key in keyof ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>]: ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>[key]}, ROS = {[key in keyof MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>]: MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>[key]}>(context: C2, func: Predicate<S2>): Predicate<PS, PredicateAndContext, {}, ROS>;
-    and<RPS = OS, C2 extends PredicateContext = PredicateContext, S2 = {[key in keyof ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>]: ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>[key]}, ROS = {[key in keyof MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>]: MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>[key]}>(...args: PredicateArgs<C2, S2>): Predicate<PS, PredicateAndContext, {}, ROS>;
-    and<RPS = OS, C2 extends PredicateContext = PredicateContext, S2 = {[key in keyof ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>]: ScopeFrom<RPS, ScopeMapFrom<CArgsFrom<C2>>>[key]}, ROS = {[key in keyof MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>]: MergeScope<RPS, S2, ReverseMap<ScopeMapFrom<CArgsFrom<C2>>>>[key]}>(...args: PredicateArgs<C2, S2>): Predicate<PS, PredicateAndContext, {}, ROS> {
-        return new Predicate<PS, PredicateAndContext, {}, ROS>({left: this, right: new Predicate<RPS, C2, S2, ROS>(...args)}, andFunc);
+    and<S2, C2 = {}>(func: boolean | PredicateFunction<S2>, context: C2): Predicate<Merge<S2, S>, {left: Predicate<S, C>, right: Predicate<S2, C2>}>;
+    and<S2, C2 = {}>(func: Predicate<S2>, context: C2): Predicate<Merge<S2, S>, {left: Predicate<S, C>, right: Predicate<S2, C2>}>;
+    and<S2, C2 = {}>(...args: PredicateArgs<S2, C2>): Predicate<Merge<S2, S>, {left: Predicate<S, C>, right: Predicate<S2, C2>}>;
+    and<S2, C2 = {}>(...args: PredicateArgs<S2, C2>): Predicate<Merge<S2, S>, {left: Predicate<S, C>, right: Predicate<S2, C2>}> {
+        return new Predicate<Merge<S2, S>, {left: Predicate<S, C>, right: Predicate<S2, C2>}>(andFunc, {left: this, right: new Predicate<S2, C2>(...args)});
     }
 
     // private static _and(left: Predicate, args: PredicateArgs[], index: number): Predicate {
@@ -389,7 +398,7 @@ class Predicate<
 
 // const {and} = Predicate;
 
-const popScopePredicate = new Predicate({}, popScope);
+const popScopePredicate = new Predicate(popScope);
 
 type Immutable = string | number | boolean | symbol;
 type StrictArg = Arg | Arg[] | {[key in string | number]: Arg};
@@ -591,7 +600,7 @@ abstract class Arg<Name extends string = string> {
     }
 
     clone(thread: Thread): Arg {
-        const alreadyCloned = thread.fields.read(this.name);
+        const alreadyCloned: any = thread.fields.read(this.name);
         if (alreadyCloned instanceof Arg) return alreadyCloned;
 
         const newlyCloned = new ArgImpl(this.name, thread);
@@ -711,25 +720,31 @@ type MSCTO = Merge<SCT, SCTO>;
 type SCO = MergeScope<FS, SCA, SCR>;
 type ASCO = MergeScope<any, SCA, SCR>;
 
-const m1 = new Predicate(['a', 'b', 'k'] as const, true);
-type m1OS = typeof m1 extends Predicate<any, any, any, infer OS> ? OS : any;
-const m11 = m1.and(['a'] as const, ArgTemplate.create({key: Arg.c('k'), value: Arg._()}).write);
-type m11OS = typeof m11 extends Predicate<m1OS, any, infer S, infer OS> ? OS : any;
-const m2 = m11
-.and(['a', 'k'] as const, scope => (scope.a, scope.k = scope.a.key, true));
+// const m1 = new Predicate(['a', 'b', 'k'] as const, true);
+// type m1OS = typeof m1 extends Predicate<any, any, any, infer OS> ? OS : any;
+// const m11 = m1.and(['a'] as const, ArgTemplate.create({key: Arg.c('k'), value: Arg._()}).write);
+// type m11OS = typeof m11 extends Predicate<m1OS, any, infer S, infer OS> ? OS : any;
+// const m2 = m11
+// .and(['a', 'k'] as const, scope => (scope.a, scope.k = scope.a.key, true));
 
-new Predicate({args: ['a', 'b']}, match);
-const matchKey = new Predicate({args: {b: 'c', k: 'd'} as const},
-    new Predicate<{b: string}>(['b'] as const, true)
-    .and(['a'] as const, ArgTemplate.create({key: Arg.c('k'), value: Arg._()}).write)
-    // new Predicate(['a'] as const, ArgTemplate.create({key: Arg.c('k'), value: Arg._()}).write)
-    .and(['a', 'k'] as const, scope => (scope.k, scope.k = scope.a.key, true))
-    .and({args: {left: 'a', right: 'b'}} as const, ((...args) => match(...args)))
-    .and(['b'] as const, (scope) => true)
-);
+// new Predicate({args: ['a', 'b']}, match);
+// const matchKey = new Predicate({args: {b: 'c', k: 'd'} as const},
+//     new Predicate(['b'] as const, true)
+//     .and(['a'] as const, ArgTemplate.create({key: Arg.c('k'), value: Arg._()}).write)
+//     // new Predicate(['a'] as const, ArgTemplate.create({key: Arg.c('k'), value: Arg._()}).write)
+//     .and(['a', 'k'] as const, scope => (scope.k, scope.k = scope.a.key, true))
+//     .and({args: {left: 'a', right: 'b'}} as const, ((...args) => match(...args)))
+//     .and(['b'] as const, (scope) => true)
+// );
 
-const withFields = <F extends (...args) => any, K extends string>(f: F, map: (K)[]) => {};
-withFields((scope) => scope.a, ['b']);
+const mapFrom = <K extends string, V extends string, M extends K[] | {[key in K]: V}>(map: M): M extends (infer K2)[] ? {[key in Extract<K2, string>]: key} : M extends {[key in K]: string} ? {[key in keyof M]: M[key]} : {[key: string]: string} => Array.isArray(map) ? map.reduce((carry, key) => (carry[key] = key, carry), {} as any) : map;
+const m1 = mapFrom(['a', 'b', 'c']);
+const m2 = mapFrom({a: 'l', b: 'm', c: 'n'});
+const withFields = <F extends (scope, thread: Omit<Thread, 'fields'> & {fields: FieldSet<any, any, FS>}) => any, S = Parameters<F>[0], K extends Extract<keyof S & keyof FS, string> = Extract<keyof S & keyof FS, string>>(f: F, map: (K)[]) => (thread: Omit<Thread, 'fields'> & {fields: FieldSet<any, any, FS>}) => f(thread.fields.remap(mapFrom(map)), thread);
+const w1 = withFields((scope, thread: Omit<Thread, 'fields'> & {fields: FieldSet<any, any, {a: number, b, k}>}) => scope.a, ['b']);
+() => {withFields(scope => scope.a, ['a'])(new Thread({a: 1, b: 'b', k: 'c'}, null))}
+
+const withArgs = () => {};
 
 ArgTemplate.create(['abc']).write
 
@@ -769,8 +784,8 @@ assert.throws = (f, e_ = Error, msg: string = `${f.name} throws ${e_} (${assertL
 
 {
     console.log('Arg');
-    const t = new Thread({}, new Predicate({args: {}}, true));
-    t.elseThen(new Predicate({}, true));
+    const t = new Thread({}, new Predicate(true));
+    t.elseThen(new Predicate(true));
     const arg = new ArgImpl('arg', null);
     assert.equals(arg.value, null);
     assert.throws(() => (arg.write('value')));
@@ -783,7 +798,7 @@ assert.throws = (f, e_ = Error, msg: string = `${f.name} throws ${e_} (${assertL
     // pushScope({}, t);
     arg2.write('2');
     // console.log(t.fields);
-    t.elseThen(new Predicate({}, true));
+    t.elseThen(new Predicate(true));
     // console.log(t.fields);
     assert.equals(arg2.value, '2');
     // pushScope({}, t);
