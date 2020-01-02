@@ -1,6 +1,6 @@
 import { threadId } from "worker_threads";
 import { timingSafeEqual } from "crypto";
-import { RSA_PKCS1_OAEP_PADDING } from "constants";
+import { RSA_PKCS1_OAEP_PADDING, ENGINE_METHOD_PKEY_ASN1_METHS } from "constants";
 
 console.log('開始');
 
@@ -332,7 +332,7 @@ type ScopeMapFrom<CArgs> = CArgs extends (infer Keys)[] ? Readonly<{[key in Extr
 type ValueOutTarget<O, V, P = {[key in keyof O]: V extends O[key] ? never : key}> = Exclude<P[keyof P], never>;
 type ValueInTarget<O, V, P = {[key in keyof O]: O[key] extends V ? key : never}> = Exclude<P[keyof P], never>;
 type ScopeFrom<PS, SM extends {[key: string]: string}> = {[key in ValueInTarget<SM, keyof PS>]: PS[Extract<SM[key], keyof PS>]};
-type ReverseMap<M extends {[key: string]: string}> = {[key in M[keyof M]]: PickValues<M, key>};
+type ReverseMap<M extends {[key: string]: string}> = {[key in Extract<M[keyof M], string>]: Extract<PickValues<M, key>, string>};
 
 type _PV<N, K extends keyof N, V> = {[key in K]: V extends N[key] ? key : never};
 type PickValues<O, V, R = _PV<O, keyof O, V>> = Exclude<R[keyof R], never>;
@@ -737,7 +737,98 @@ type ASCO = MergeScope<any, SCA, SCR>;
 //     .and(['b'] as const, (scope) => true)
 // );
 
-const mapFrom = <K extends string, V extends string, M extends K[] | {[key in K]: V}>(map: M): M extends (infer K2)[] ? {[key in Extract<K2, string>]: key} : M extends {[key in K]: string} ? {[key in keyof M]: M[key]} : {[key: string]: string} => Array.isArray(map) ? map.reduce((carry, key) => (carry[key] = key, carry), {} as any) : map;
+type PDReturn = Promise<boolean> | boolean;
+type PDF = (thread: Thread) => PDReturn;
+type PDD<Args extends [Thread] | [any, Thread] | [any, any, Thread] | [any, any, any, Thread] = any, Map extends any[] | {[key: string]: string} = {[key: string]: string}, Scope extends {[key: string]: any} = {[key: string]: any}> = {decorate: (f: (...args: Args) => PDReturn) => PDF, map?: Map, defaults?: Scope};
+type PDD_Args<Pdd extends PDD> = Pdd extends PDD<infer Args> ? Args : [Thread];
+type PDD_Map<Pdd extends PDD> = Pdd extends PDD<any, infer Map> ? Map : {};
+type PDD_Scope<Pdd extends PDD> = Pdd extends PDD<any, any, infer Scope> ? Scope : {};
+type PDIS<Scope = any, Pdd extends PDD = PDD, Args = PDD_Args<Pdd>, Map = PDD_Map<Pdd>, PScope = PDD_Scope<Pdd>> = Args extends [infer A1, Thread] ? Merge<ScopeFrom<Scope, ScopeMapFrom<Map>>, PScope> : Scope;
+type PDIN<Scope = any, Pdd extends PDD = PDD, Args = PDD_Args<Pdd>, Map = PDD_Map<Pdd>, PScope = PDD_Scope<Pdd>> = Args extends [infer A1, Thread] ? Merge<Scope, ScopeFrom<PScope, ReverseMap<ScopeMapFrom<Map>>>> : Scope;
+type PDINA<Scope = any, Pdd extends PDD = PDD, Args extends [Thread] | [any, Thread] = [Thread], Map = PDD_Map<Pdd>, ArgScope = Args extends [infer A1, Thread] ? A1 : {}> = Merge<Scope, ScopeFrom<ArgScope, ReverseMap<ScopeMapFrom<Map>>>>;
+type PDIO<Scope = any, O extends {[key: string]: any} = {}, N = {[key in keyof O]: Scope extends {[k in key]: any} ? Scope[key] : O[key]}> = {[key in keyof N]: N[key]};
+type PDIA<Scope = any, Args extends [Thread] | [any, Thread] = [Thread]> = Args extends [Arg<infer K1>, Thread] ? [Arg<K1>, Thread] : Args extends [infer A1, Thread] ? [{[key in keyof PDIO<Scope, A1>]: PDIO<Scope, A1>[key]}, Thread] : Args;
+type Eval<O> = O extends infer E ? E : O;
+type PDI<Scope = any, Pdd extends PDD = PDD, Args extends [Thread] | [any, Thread] = Pdd extends PDD<infer Args_> ? Args_ : [Thread], MapScope = PDIS<Scope, Pdd>, MapArgs extends PDIA<MapScope, Args> = PDIA<MapScope, Args>> = (f: (...args: MapArgs) => PDReturn) => PD<{[key in keyof PDINA<Scope, Pdd, MapArgs>]: PDINA<Scope, Pdd, MapArgs>[key]}>;
+
+class PD<Scope = any> {
+    func: PDF;
+    context: any;
+
+    constructor(f?: PDF, c?: any) {
+        this.func = f;
+        this.context = c;
+    }
+    and(f: PDF): PD<Scope>;
+    and<P extends PDD>(f: P): PDI<Scope, P>;
+    and<P extends PDD>(f: P | PDF): PDI<Scope, P> | PD<Scope>;
+    and<P extends PDD>(f: P | PDF) {
+        return PD.create<Scope, P>(f);
+    }
+
+    static create<Scope = any, P extends PDD = PDD>(f: PDF): PD<Scope>;
+    static create<Scope = any, P extends PDD = PDD>(f: P): PDI<Scope, P>;
+    static create<Scope = any, P extends PDD = PDD>(f: P | PDF): PDI<Scope, P> | PD<Scope>;
+    static create<Scope = any, P extends PDD = PDD, PI = PDI<Scope, P>>(f: P | PDF) {
+        if ('decorate' in f) {
+            return (f2: (...args: P extends PDD<infer Args> ? Args : any[]) => PDReturn) => new PD<Scope>(f.decorate(f2));
+        } else {
+            return new PD<Scope>(f);
+        }
+    }
+}
+
+function wf<K extends string, M extends K[], Defaults extends {[key in M[Extract<keyof M, number>]]: any}>(fields: M, defaults?: Defaults): PDD<[{[key in M[Extract<keyof M, number>]]: any}, Thread], M, Defaults>;
+function wf<K extends string, V extends string, M extends {[key in K]: V}, Defaults extends {[key in keyof M]?: any}>(fields: M, defaults?: Defaults): PDD<[{[key in keyof M]: any}, Thread], M, Defaults>;
+function wf<K extends string, V extends string, M extends K[] | {[key in K]: V}, Defaults extends {[key in keyof M]?: any}>(fields: M, defaults?: Defaults) {
+    if (Array.isArray(fields)) {
+        const mappedFields = mapFrom(fields as K[]);
+        return {
+            decorate: (f: (scope: {[key in K]: any}, thread: Thread) => PDReturn) => (
+                (thread: Thread) => f(thread.fields.remap(mappedFields), thread)
+            ),
+            map: mappedFields,
+            defaults,
+        };
+    } else {
+        const mappedFields = mapFrom(fields as {[key in K]: V});
+        return {
+            decorate: (f: (scope: {[key in K]: any}, thread: Thread) => PDReturn) => (
+                (thread: Thread) => f(thread.fields.remap(mappedFields), thread)
+            ),
+            map: mappedFields,
+            defaults,
+        };
+    }
+};
+const wf1 = wf({});
+wf(['a']).decorate((scope, thread) => true);
+
+// type CA<A, B> = A extends [] ? B : B extends [] ? A : A extends [infer A1] ? B extends [infer B1] ? [A1, B1] : B extends [infer B1, infer B2] ? [A1, B1, B2] : B extends [infer B1, infer B2, infer B3] ? [A1, B1, B2, B3] : B extends [infer B1, infer B2, infer B3, infer B4] ? [A1, B1, B2, B3, B4] : A 
+// type CAA<A, B extends any[]> = A extends [] ? B : A extends [infer A1] ? [A1, ...B] : A;
+type Join<A, T = Thread> = (
+    A extends [infer A1] ? [A1, T] :
+    A extends [infer A1, infer A2] ? [A1, A2, T] :
+    A extends [infer A1, infer A2, infer A3] ? [A1, A2, A3, T] :
+    A extends [infer A1, infer A2, infer A3, infer A4] ? [A1, A2, A3, A4, T] :
+    A extends [infer A1, infer A2, infer A3, infer A4, infer A5] ? [A1, A2, A3, A4, A5, T] :
+    [T]
+);
+const wa = <Args extends any[]>(...args: Args) => Object.assign((f: (...fargs: Join<Args>) => Promise<boolean> | boolean) => (thread) => f(...(args.concat(thread) as Join<Args>)), {decorator: true as const});
+const wa1 = wa(Arg.c('a'));
+wa1((a, thread) => true);
+wa()(thread => true);
+
+const p1 = new PD<{b: boolean}>().and(wf({a: 'b', b: 'd'}, {b: 0}))((scope, thread) => scope.a);
+type P1S = typeof p1 extends PD<infer S> ? S : any;
+const p2 = p1.and(wf({d: 'd'}))((scope, thread) => (scope.d, true));
+new PD().and(thread => true);
+
+function mapFrom<K extends string, M extends K[]>(map: M): {[key in M[Extract<keyof M, number>]]: key};
+function mapFrom<K extends string, V extends string, M extends {[key in K]: V}>(map: M): {[key in keyof M]: M[key]};
+function mapFrom<K extends string, V extends string, M extends K[] | {[key in K]: V}>(map: M): M extends (infer K2)[] ? {[key in Extract<K2, string>]: key} : M extends {[key in K]: string} ? {[key in keyof M]: M[key]} : {[key: string]: string} {
+    return Array.isArray(map) ? map.reduce((carry, key) => (carry[key] = key, carry), {} as any) : map;
+}
 const m1 = mapFrom(['a', 'b', 'c']);
 const m2 = mapFrom({a: 'l', b: 'm', c: 'n'});
 const withFields = <F extends (scope, thread: Omit<Thread, 'fields'> & {fields: FieldSet<any, any, FS>}) => any, S = Parameters<F>[0], K extends Extract<keyof S & keyof FS, string> = Extract<keyof S & keyof FS, string>>(f: F, map: (K)[]) => (thread: Omit<Thread, 'fields'> & {fields: FieldSet<any, any, FS>}) => f(thread.fields.remap(mapFrom(map)), thread);
