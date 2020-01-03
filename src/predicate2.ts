@@ -739,17 +739,28 @@ type ASCO = MergeScope<any, SCA, SCR>;
 
 type PDReturn = Promise<boolean> | boolean;
 type PDF = (thread: Thread) => PDReturn;
-type PDD<Args extends [Thread] | [any, Thread] | [any, any, Thread] | [any, any, any, Thread] = any, Map extends any[] | {[key: string]: string} = {[key: string]: string}, Scope extends {[key: string]: any} = {[key: string]: any}> = {decorate: (f: (...args: Args) => PDReturn) => PDF, map?: Map, defaults?: Scope};
+type PDArgs = [Thread] | [any, Thread] | [any, any, Thread] | [any, any, any, Thread];
+type PDD<Args extends PDArgs = any, Map extends any[] | {[key: string]: string} = any, Scope extends {[key: string]: any} = any> = {decorate: (f: (...args: Args) => PDReturn) => PDF, map?: Map, defaults?: Scope};
 type PDD_Args<Pdd extends PDD> = Pdd extends PDD<infer Args> ? Args : [Thread];
 type PDD_Map<Pdd extends PDD> = Pdd extends PDD<any, infer Map> ? Map : {};
 type PDD_Scope<Pdd extends PDD> = Pdd extends PDD<any, any, infer Scope> ? Scope : {};
 type PDIS<Scope = any, Pdd extends PDD = PDD, Args = PDD_Args<Pdd>, Map = PDD_Map<Pdd>, PScope = PDD_Scope<Pdd>> = Args extends [infer A1, Thread] ? Merge<ScopeFrom<Scope, ScopeMapFrom<Map>>, PScope> : Scope;
 type PDIN<Scope = any, Pdd extends PDD = PDD, Args = PDD_Args<Pdd>, Map = PDD_Map<Pdd>, PScope = PDD_Scope<Pdd>> = Args extends [infer A1, Thread] ? Merge<Scope, ScopeFrom<PScope, ReverseMap<ScopeMapFrom<Map>>>> : Scope;
-type PDINA<Scope = any, Pdd extends PDD = PDD, Args extends [Thread] | [any, Thread] = [Thread], Map = PDD_Map<Pdd>, ArgScope = Args extends [infer A1, Thread] ? A1 : {}> = Merge<Scope, ScopeFrom<ArgScope, ReverseMap<ScopeMapFrom<Map>>>>;
+type PDINA_<Scope = any, Pdd extends PDD = PDD, Args extends PDArgs = PDIA<PDIS<Scope, Pdd>, PDD_Args<Pdd>>, Map = PDD_Map<Pdd>, ArgScope = Args extends [infer A1, Thread] ? A1 : {}> = Merge<Scope, ScopeFrom<ArgScope, ReverseMap<ScopeMapFrom<Map>>>>;
+type PDINA<Scope = any, Pdd extends PDD = PDD> = PDINA_<Scope, Pdd>;
+// PDINA<Scope, Pdd, PDIA<PDIS<Scope, Pdd>, PDD_Args<Pdd>>>
+// PDINA_<Scope, Pdd> = PDINA<Scope, Pdd, PDIA<PDIS<Scope, Pdd>, PDD_Args<Pdd>>>
 type PDIO<Scope = any, O extends {[key: string]: any} = {}, N = {[key in keyof O]: Scope extends {[k in key]: any} ? Scope[key] : O[key]}> = {[key in keyof N]: N[key]};
-type PDIA<Scope = any, Args extends [Thread] | [any, Thread] = [Thread]> = Args extends [Arg<infer K1>, Thread] ? [Arg<K1>, Thread] : Args extends [infer A1, Thread] ? [{[key in keyof PDIO<Scope, A1>]: PDIO<Scope, A1>[key]}, Thread] : Args;
+type PDIA<Scope = any, Args extends PDArgs = [Thread]> = Args extends [Arg<infer K1>, Thread] ? [Arg<K1>, Thread] : Args extends [infer A1, Thread] ? [{[key in keyof PDIO<Scope, A1>]: PDIO<Scope, A1>[key]}, Thread] : Args;
+type PDIAA<Scope = any, Pdd extends PDD = PDD, Args extends PDArgs = PDD_Args<Pdd>, Map extends any[] | {[key: string]: string} = PDD_Map<Pdd>, DScope extends {[key: string]: any} = PDD_Scope<Pdd>> = PDIA<PDIS<Scope, PDD<Args, Map, DScope>>, PDD_Args<PDD<Args, Map, DScope>>>;
 type Eval<O> = O extends infer E ? E : O;
-type PDI<Scope = any, Pdd extends PDD = PDD, Args extends [Thread] | [any, Thread] = Pdd extends PDD<infer Args_> ? Args_ : [Thread], MapScope = PDIS<Scope, Pdd>, MapArgs extends PDIA<MapScope, Args> = PDIA<MapScope, Args>> = (f: (...args: MapArgs) => PDReturn) => PD<{[key in keyof PDINA<Scope, Pdd, MapArgs>]: PDINA<Scope, Pdd, MapArgs>[key]}>;
+type PDIF<Scope = any, Args extends PDArgs = [Thread], Map extends any[] | {[key: string]: string} = any, DScope extends {[key: string]: any} = any> = (f: (...args: PDIAA<Scope, PDD<Args, Map, DScope>>) => PDReturn) => PD<{[key in keyof PDINA<Scope, PDD<Args, Map, DScope>>]: PDINA<Scope, PDD<Args, Map, DScope>>[key]}>;
+type PDPDArgs<Scope = any, Pdd extends PDD = PDD> = PDIA<PDIS<Scope, Pdd>, PDD_Args<Pdd>>;
+type PDPDOutScope<Scope = any, Pdd extends PDD = PDD> = {[key in keyof PDINA<Scope, Pdd>]: PDINA<Scope, Pdd>[key]};
+type PDPDF<Args extends PDArgs = [Thread]> = (...args: Args) => PDReturn;
+type PDPD<F extends PDPDF, OutScope extends PD> = (f: F) => OutScope;
+// PDPD<PDPDArgs<Scope, Pdd>, PDPDOutScope<Scope, Pdd>>
+type PDI<Scope = any, Pdd extends PDD = PDD> = (f: (...args: PDIA<PDIS<Scope, Pdd>, PDD_Args<Pdd>>) => PDReturn) => PD<{[key in keyof PDINA<Scope, Pdd>]: PDINA<Scope, Pdd>[key]}>;
 
 class PD<Scope = any> {
     func: PDF;
@@ -760,18 +771,18 @@ class PD<Scope = any> {
         this.context = c;
     }
     and(f: PDF): PD<Scope>;
-    and<P extends PDD>(f: P): PDI<Scope, P>;
-    and<P extends PDD>(f: P | PDF): PDI<Scope, P> | PD<Scope>;
+    and<P extends PDD>(f: P): PDPD<(...args: PDPDArgs<Scope, P>) => PDReturn, PD<{[key in keyof PDINA<Scope, P>]: PDINA<Scope, P>[key]}>>;
+    and<P extends PDD>(f: P | PDF): PDPD<(...args: PDPDArgs<Scope, P>) => PDReturn, PD<{[key in keyof PDINA<Scope, P>]: PDINA<Scope, P>[key]}>> | PD<Scope>;
     and<P extends PDD>(f: P | PDF) {
         return PD.create<Scope, P>(f);
     }
 
     static create<Scope = any, P extends PDD = PDD>(f: PDF): PD<Scope>;
-    static create<Scope = any, P extends PDD = PDD>(f: P): PDI<Scope, P>;
-    static create<Scope = any, P extends PDD = PDD>(f: P | PDF): PDI<Scope, P> | PD<Scope>;
+    static create<Scope = any, P extends PDD = PDD>(f: P): PDPD<(...args: PDPDArgs<Scope, P>) => PDReturn, PD<{[key in keyof PDINA<Scope, P>]: PDINA<Scope, P>[key]}>>;
+    static create<Scope = any, P extends PDD = PDD>(f: P | PDF): PDPD<(...args: PDPDArgs<Scope, P>) => PDReturn, PD<{[key in keyof PDINA<Scope, P>]: PDINA<Scope, P>[key]}>> | PD<Scope>;
     static create<Scope = any, P extends PDD = PDD, PI = PDI<Scope, P>>(f: P | PDF) {
         if ('decorate' in f) {
-            return (f2: (...args: P extends PDD<infer Args> ? Args : any[]) => PDReturn) => new PD<Scope>(f.decorate(f2));
+            return (f2: (...args: PDD_Args<P>) => PDReturn) => new PD<PDPDOutScope<Scope, P>>(f.decorate(f2));
         } else {
             return new PD<Scope>(f);
         }
@@ -802,7 +813,7 @@ function wf<K extends string, V extends string, M extends K[] | {[key in K]: V},
     }
 };
 const wf1 = wf({});
-wf(['a']).decorate((scope, thread) => true);
+wf(['a'], {a: 0}).decorate((scope, thread) => true);
 
 // type CA<A, B> = A extends [] ? B : B extends [] ? A : A extends [infer A1] ? B extends [infer B1] ? [A1, B1] : B extends [infer B1, infer B2] ? [A1, B1, B2] : B extends [infer B1, infer B2, infer B3] ? [A1, B1, B2, B3] : B extends [infer B1, infer B2, infer B3, infer B4] ? [A1, B1, B2, B3, B4] : A 
 // type CAA<A, B extends any[]> = A extends [] ? B : A extends [infer A1] ? [A1, ...B] : A;
@@ -819,10 +830,14 @@ const wa1 = wa(Arg.c('a'));
 wa1((a, thread) => true);
 wa()(thread => true);
 
+const p1i = new PD<{b: boolean}>().and(wf({a: 'b', b: 'd'}, {a: '', b: 0}));
+const p1i1 = p1i((scope: {a: boolean}) => (scope.a, true));
 const p1 = new PD<{b: boolean}>().and(wf({a: 'b', b: 'd'}, {b: 0}))((scope, thread) => scope.a);
 type P1S = typeof p1 extends PD<infer S> ? S : any;
 const p2 = p1.and(wf({d: 'd'}))((scope, thread) => (scope.d, true));
-new PD().and(thread => true);
+const p3 = new PD().and(thread => true);
+const nnnnn = null as {a: boolean};
+const nnnn = null;
 
 function mapFrom<K extends string, M extends K[]>(map: M): {[key in M[Extract<keyof M, number>]]: key};
 function mapFrom<K extends string, V extends string, M extends {[key in K]: V}>(map: M): {[key in keyof M]: M[key]};
