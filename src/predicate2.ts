@@ -420,8 +420,9 @@ type Flatten4<T, A = Flatten<T>> = A extends Immutable | Arg ? A : Flatten3<A>;
 type Flatten5<T, A = Flatten<T>> = A extends Immutable | Arg ? A : Flatten4<A>;
 // type ArgsInBind<T extends BindArg> = T extends Arg<infer A> ? Arg<A> : T extends BindArg[] ? {[key in Extract<keyof T, number>]: ArgsInBind<T[key]>}[Extract<keyof T, number>] : T extends {[key in string | number]: BindArg} ? ArgsInBind<T[Extract<keyof T, string | number>]> : never;
 
-interface WriteableArg {
-    write(value: any): void;
+type ArgValue<Type = any> = Type extends Boolean ? boolean : Type extends Number ? number : Type extends String ? string : Type;
+interface WriteableArg<Type = any> {
+    write(value: ArgValue<Type>): void;
 }
 
 enum ArgTemplateMode {
@@ -577,33 +578,42 @@ class ObjectArgTemplate<O extends {[key in string | number]: BindArg}> extends A
     }
 }
 
-abstract class Arg<Name extends string = string> {
+abstract class Arg<Name extends string = string, Type = any> {
     readonly name: Name;
+    readonly valueType: new () => Type = null;
 
     protected fields: FieldSet = null;
     protected readonly thread: Thread;
 
     constructor(name: Name);
+    constructor(name: Name, valueType: new () => Type);
     constructor(name: Name, thread: Thread);
-    constructor(...args: [Name] | [Name, Thread]) {
+    constructor(name: Name, valueType: new () => Type, thread: Thread);
+    constructor(...args: [Name] | [Name, new () => Type] | [Name, Thread] | [Name, new () => Type, Thread]) {
         if (args.length === 1) {
             [this.name] = args;
         } else if (args.length === 2) {
-            [this.name, this.thread] = args;
+            if (args[1] instanceof Thread) {
+                [this.name, this.thread] = args;
+            } else {
+                [this.name, this.valueType] = args;
+            }
+        } else if (args.length === 3) {
+            [this.name, this.valueType, this.thread] = args;
         }
     }
 
-    abstract get value(): any;
+    abstract get value(): Type extends Boolean ? boolean : Type extends Number ? number : Type extends String ? string : Type;
 
-    isNull(): this is WriteableArg {
+    isNull(): this is WriteableArg<Type> {
         return this.fields === null || this.fields.read(this) === null;
     }
 
-    clone(thread: Thread): Arg {
+    clone(thread: Thread): Arg<Name, Type> {
         const alreadyCloned: any = thread.fields.read(this.name);
         if (alreadyCloned instanceof Arg) return alreadyCloned;
 
-        const newlyCloned = new ArgImpl(this.name, thread);
+        const newlyCloned = new ArgImpl(this.name, this.valueType, thread);
 
         if (alreadyCloned !== null && typeof alreadyCloned !== 'undefined') {
             thread.fields.write(newlyCloned, alreadyCloned);
@@ -614,8 +624,16 @@ abstract class Arg<Name extends string = string> {
         return newlyCloned;
     }
 
-    static c<Name extends string>(name: Name): Arg<Name> {
-        return new ArgImpl(name);
+    static c<Name extends string, Type = any>(name: Name, valueType?: new () => Type): Arg<Name, Type> {
+        return new ArgImpl(name, valueType);
+    }
+
+    static t<Constructor extends new () => any>(valueType: Constructor) {
+        return class TypedArg<Name extends string> extends ArgImpl<Name, Constructor extends new () => infer Type ? Type : any> {
+            static c<Name extends string>(name: Name) {
+                return new this(name, valueType) as Arg<Name, Constructor extends new () => infer Type ? Type : any>;
+            }
+        };
     }
 
     static _(): Arg<'_'> {
@@ -623,13 +641,13 @@ abstract class Arg<Name extends string = string> {
     }
 }
 
-class ArgImpl<Name extends string = string> extends Arg<Name> implements WriteableArg {
+class ArgImpl<Name extends string = string, Type = any> extends Arg<Name, Type> implements WriteableArg<Type> {
     get value() {
         if (this.fields) return this.fields.read(this);
         return null;
     }
 
-    write(value: any): void {
+    write(value: ArgValue<Type>): void {
         if (this.isNull()) {
             this.fields = this.thread.fields;
             this.fields.write(this, value);
@@ -639,14 +657,14 @@ class ArgImpl<Name extends string = string> extends Arg<Name> implements Writeab
     }
 }
 
-class AnonymousArg extends ArgImpl<'_'> {
+class AnonymousArg extends Arg<'_', null> {
     constructor() {
         super('_');
     }
-    get value() {return null;}
-    write(value: any): void {}
+    get value(): null {return null;}
+    write(value: null): void {}
     isNull(): this is WriteableArg {return true;}
-    clone(): Arg {
+    clone(): Arg<'_', null> {
         return new AnonymousArg();
     }
 }
@@ -789,6 +807,70 @@ class PD<Scope = any> {
     }
 }
 
+interface Cloneable<Clone extends {clone(): Clone} = any> {
+    clone(thread: Thread): Clone;
+}
+
+class MightClone {
+    clone() {
+        return new MightClone();
+    }
+}
+
+{
+    const c: Cloneable<MightClone> = new MightClone();
+    const cc = c.clone(new Thread({}, new Predicate(true)));
+}
+
+type Default = boolean | number | string | symbol | Cloneable;
+
+function cloneDefault(d: boolean, t?: Thread): boolean;
+function cloneDefault(d: number, t?: Thread): number;
+function cloneDefault(d: string, t?: Thread): string;
+function cloneDefault(d: symbol, t?: Thread): symbol;
+function cloneDefault<D extends Cloneable>(d: D, t: Thread): D extends Cloneable<infer Clone> ? Clone : D;
+function cloneDefault<D extends Default>(d: D, t: Thread): D extends Cloneable<infer Clone> ? Clone : D;
+function cloneDefault<D extends Default>(d: D, t: Thread): (D extends Cloneable<infer Clone> ? Clone : D) | D {
+    if (d === null) return null;
+    switch (d) {
+        case 'undefined':
+        case 'boolean':
+        case 'number':
+        case 'string':
+        case 'symbol':
+            return d;
+        case 'function':
+            throw new Error();
+        case 'object':
+            if ('clone' in d) return (d as Cloneable).clone(t);
+        default:
+            throw new Error();
+    }
+}
+
+{
+    const t = new Thread({}, new Predicate(true));
+    const c = cloneDefault(new MightClone(), t);
+    const f = cloneDefault(new FieldSet({}, {}), new Thread({}, new Predicate(true)));
+    const a = cloneDefault(Arg.c('k', Number), new Thread({}, new Predicate(true)));
+    Arg.c('z');
+    Arg.c('a', Boolean);
+    const BooleanArg = Arg.t(Boolean);
+    const b0 = BooleanArg.c('a');
+    b0.value;
+    b0.isNull() && b0.write;
+    const ba = new BooleanArg('a');
+    ba.value;
+    ba.write;
+    ba.clone
+    const ba0 = cloneDefault(BooleanArg.c('a'), t);
+    Arg.c('b', Number).value;
+    Arg.c('c', String);
+    Arg.c('d', Object);
+    Arg.c('e', Array).value;
+    Arg.c('f', MightClone).value.clone;
+}
+
 function wf<K extends string, M extends K[], Defaults extends {[key in M[Extract<keyof M, number>]]: any}>(fields: M, defaults?: Defaults): PDD<[{[key in M[Extract<keyof M, number>]]: any}, Thread], M, Defaults>;
 function wf<K extends string, V extends string, M extends {[key in K]: V}, Defaults extends {[key in keyof M]?: any}>(fields: M, defaults?: Defaults): PDD<[{[key in keyof M]: any}, Thread], M, Defaults>;
 function wf<K extends string, V extends string, M extends K[] | {[key in K]: V}, Defaults extends {[key in keyof M]?: any}>(fields: M, defaults?: Defaults) {
@@ -830,8 +912,8 @@ const wa1 = wa(Arg.c('a'));
 wa1((a, thread) => true);
 wa()(thread => true);
 
-const p1i = new PD<{b: boolean}>().and(wf({a: 'b', b: 'd'}, {a: '', b: 0}));
-const p1i1 = p1i((scope: {a: boolean}) => (scope.a, true));
+const p1i = new PD<{b: boolean}>().and(wf({a: 'b', b: 'd'}, {a: '', b: null as Arg<'d'>}));
+const p1i1 = p1i((scope) => (scope.a, true));
 const p1 = new PD<{b: boolean}>().and(wf({a: 'b', b: 'd'}, {b: 0}))((scope, thread) => scope.a);
 type P1S = typeof p1 extends PD<infer S> ? S : any;
 const p2 = p1.and(wf({d: 'd'}))((scope, thread) => (scope.d, true));
