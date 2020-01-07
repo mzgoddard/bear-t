@@ -1,23 +1,23 @@
-import {Predicate, SyncReturn} from "./Predicate";
+import {Atom, SyncReturn} from "./Atom";
 import { ThreadHash } from "./ThreadHash";
 
 type Result<Main, ReturnValue> = (
-    Main extends Predicate<SyncReturn> ?
+    Main extends Atom<SyncReturn> ?
     {value: ReturnValue, done: boolean} :
     Promise<{value: ReturnValue, done: boolean}>
 );
 
 class ThreadNode {
-    then: Predicate;
+    then: Atom;
     next: ThreadNode;
 
-    constructor(then: Predicate, next: ThreadNode = null) {
+    constructor(then: Atom, next: ThreadNode = null) {
         this.then = then;
         this.next = next;
     }
 }
 
-export class Thread<Main = Predicate, ReturnValue = any> {
+export class Thread<Main = Atom, ReturnValue = any> {
     hash: ThreadHash;
     frame: ThreadNode;
     origin: ThreadNode;
@@ -29,13 +29,13 @@ export class Thread<Main = Predicate, ReturnValue = any> {
 
     answer(): Result<Main, ReturnValue> {}
 
-    ifThen(then: Predicate) {
+    ifThen(then: Atom) {
         this.frame.next = new ThreadNode(then, this.frame.next);
     }
 
-    elseThen(then: Predicate) {}
+    elseThen(then: Atom) {}
 
-    finally(then: Predicate) {}
+    finally(then: Atom) {}
 
     rewind() {}
 }
