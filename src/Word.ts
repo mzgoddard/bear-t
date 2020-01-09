@@ -1,4 +1,4 @@
-import { Thread } from "./iterations/predicate";
+import { Thread } from "./Thread";
 import { ThreadHash } from "./ThreadHash";
 
 type SimpleType<Type> = (

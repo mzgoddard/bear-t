@@ -5,13 +5,20 @@ export type MergeScope<First, Second> = {};
 export type SyncReturn = boolean | void;
 export type AsyncReturn = Promise<SyncReturn>;
 export type AtomReturn = SyncReturn | AsyncReturn;
+export type MatchReturn<Return extends AtomReturn, Value> = Return extends AsyncReturn ? Promise<Value> : Value;
 export type MergeReturn<First, Second> = First extends SyncReturn ? Second extends SyncReturn ? SyncReturn : AsyncReturn : AsyncReturn;
 export type AtomFunction<Return extends AtomReturn> = (thread: Thread) => Return;
 export interface AtomMod<Args extends any[], Return, Scope> {
-    modify<FReturn extends AtomReturn, MReturn extends AtomReturn = MergeReturn<Return, FReturn>>(func: (...args: Args) => FReturn): AtomFunction<MReturn>;
+    modify<FReturn extends AtomReturn>(func: (...args: Args) => FReturn): AtomFunction<MergeReturn<Return, FReturn>>;
 }
-export interface AtomModMod<Args extends any[], Return, Scope> {
-    extend<MArgs extends any[], MReturn, MScope, EArgs extends any[]>(mod: AtomMod<MArgs, MReturn, MScope>): AtomMod<EArgs, MergeReturn<Return, MReturn>, MergeScope<Scope, MScope>>;
+export interface AtomModMod {
+    extend<IArgs extends any[], IReturn, IScope, OArgs extends any[], OReturn, OScope>(mod: AtomMod<IArgs, IReturn, IScope>): AtomMod<OArgs, OReturn, OScope>;
+}
+
+class AtomModModArgs<Args extends any[], Return, Scope> implements AtomModMod {
+    extend<IArgs extends any[], IReturn, IScope, OArgs extends any[] = [Args, IArgs], OReturn = MergeReturn<Return, IReturn>, OScope = MergeScope<Scope, IScope>>(mod: AtomMod<IArgs, IReturn, IScope>): AtomMod<OArgs, OReturn, OScope> {
+        return null;
+    }
 }
 
 // -----
@@ -30,7 +37,7 @@ type JoinThreadArg<Args> = (
 //     extend<MArgs extends any[], MReturn, ModScope>(mod: AtomMod<MArgs, MReturn>): AtomFactory<MArgs, MergeReturn<Return, MReturn>, MergeScope<Scope, ModScope>>;
 // }
 
-export abstract class Atom<Return = any, Scope = any> {
+export abstract class Atom<Return extends AtomReturn = any, Scope = any> {
     readonly func: AtomFunction<Return>;
     readonly children: Atom[];
 
@@ -39,27 +46,31 @@ export abstract class Atom<Return = any, Scope = any> {
         this.children = children;
     }
 
-    ask<ReturnValue = Scope>(input: any): Thread<Atom<Return, Scope>, ReturnValue> {
+    ask<ReturnValue = Scope>(input: any): Thread<Return, ReturnValue> {
         return new Thread(this, input);
+    }
+
+    run<ReturnValue = Scope>(input: any): MatchReturn<Return, ReturnValue> {
+        return null;
     }
 
     call(thread: Thread): Return {
         return this.func(thread);
     }
 
-    ifThen<FReturn, RightScope>(func: AtomFunction<FReturn>): Atom<MergeReturn<Return, FReturn>, MergeScope<Scope, RightScope>>;
-    ifThen<MArgs extends any[], MReturn, MScope>(mod: AtomMod<MArgs, MReturn, MScope>): AtomFactory<MArgs, MReturn, MScope>;
-    ifThen<MArgs extends any[], MReturn, MScope>(arg: AtomFunction<MReturn> | AtomMod<MArgs, MReturn, MScope>): Atom<MergeReturn<Return, MReturn>, MergeScope<Scope, Scope>> | AtomFactory<MArgs, MReturn, MScope> {
-
+    thenIf<FReturn extends AtomReturn, RightScope>(func: AtomFunction<FReturn>): Atom<MergeReturn<Return, FReturn>, MergeScope<Scope, RightScope>>;
+    thenIf<MArgs extends any[], MReturn extends AtomReturn, MScope>(mod: AtomMod<MArgs, MReturn, MScope>): AtomFactory<MArgs, MReturn, MScope>;
+    thenIf<MArgs extends any[], MReturn extends AtomReturn, MScope>(arg: AtomFunction<MReturn> | AtomMod<MArgs, MReturn, MScope>): Atom<MergeReturn<Return, MReturn>, MergeScope<Scope, Scope>> | AtomFactory<MArgs, MReturn, MScope> {
+        return null;
     }
 
-    elseThen<FReturn, RightScope>(func: AtomFunction<FReturn>): Atom<MergeReturn<Return, FReturn>, MergeScope<Scope, RightScope>>;
-    elseThen<MArgs extends any[], MReturn, MScope>(mod: AtomMod<MArgs, MReturn, MScope>): AtomFactory<MArgs, MReturn, MScope>;
-    elseThen<MArgs extends any[], MReturn, MScope>(arg: AtomFunction<MReturn> | AtomMod<MArgs, MReturn, MScope>): Atom<MergeReturn<Return, MReturn>, MergeScope<Scope, Scope>> | AtomFactory<MArgs, MReturn, MScope> {
-
+    elseThen<FReturn extends AtomReturn, RightScope>(func: AtomFunction<FReturn>): Atom<MergeReturn<Return, FReturn>, MergeScope<Scope, RightScope>>;
+    elseThen<MArgs extends any[], MReturn extends AtomReturn, MScope>(mod: AtomMod<MArgs, MReturn, MScope>): AtomFactory<MArgs, MReturn, MScope>;
+    elseThen<MArgs extends any[], MReturn extends AtomReturn, MScope>(arg: AtomFunction<MReturn> | AtomMod<MArgs, MReturn, MScope>): Atom<MergeReturn<Return, MReturn>, MergeScope<Scope, Scope>> | AtomFactory<MArgs, MReturn, MScope> {
+        return null;
     }
 
-    static do<Return, Scope>(func: AtomFunction<Return>): Atom<Return, Scope> {
+    static if<Return extends AtomReturn, Scope>(func: AtomFunction<Return>): Atom<Return, Scope> {
         return new AtomImpl(func);
     }
 
@@ -67,20 +78,28 @@ export abstract class Atom<Return = any, Scope = any> {
         return new AtomFactory(mod);
     }
 
-    static args<Args extends any[], Scope>(...args: Args): AtomFactory<Args, SyncReturn, Scope> {
+    static args<Args extends any[], Scope>(...args: Args): AtomFactory<JoinThreadArg<Args>, SyncReturn, Scope> {
         return new AtomFactory({
-            modify(func: (thread: Thread) => SyncReturn) {
-                return func;
+            modify<FReturn extends AtomReturn>(func: (...args: JoinThreadArg<Args>) => FReturn): AtomFunction<MergeReturn<SyncReturn, FReturn>> {
+                return (thread: Thread): MergeReturn<SyncReturn, FReturn> => {
+                    const out: unknown = func(...([...args, thread] as JoinThreadArg<Args>));
+                    if (out instanceof Promise) {
+                        return out as MergeReturn<SyncReturn, FReturn>;
+                    }
+                    return out as MergeReturn<SyncReturn, FReturn>;
+                };
             }
         });
     }
 
     static scope<CallScope, Scope>(...args): AtomFactory<[CallScope], SyncReturn, Scope> {
-        
+        return null;
     }
 }
 
-class AtomImpl<Return, Scope> extends Atom<Return, Scope> {
+function mergeReturn(){}
+
+class AtomImpl<Return extends AtomReturn, Scope> extends Atom<Return, Scope> {
 }
 
 class AtomFactory<Args extends any[], Return extends AtomReturn, Scope> implements AtomFactory<Args, Return, Scope> {
@@ -91,14 +110,14 @@ class AtomFactory<Args extends any[], Return extends AtomReturn, Scope> implemen
         this.mod = mod;
     }
 
-    do<FReturn>(func: (...args: Args) => FReturn): Atom<MergeReturn<Return, FReturn>, Scope> {
+    do<FReturn extends AtomReturn>(func: (...args: Args) => FReturn): Atom<MergeReturn<Return, FReturn>, Scope> {
         return new AtomImpl<MergeReturn<Return, FReturn>, Scope>(this.mod.modify(func));
     }
 
     // extend<ModMod extends AtomModMod, ModOut>(modMod: ModMod): ModOut {
     //     return new AtomFactory(modMod.extend(this.mod));
     // }
-    extend<MArgs extends any[], MReturn extends AtomReturn, MScope>(modMod: (mod: AtomMod<Args, Return, Scope>) => AtomMod<MArgs, MReturn, MScope>): AtomFactory<MArgs, MReturn, MScope> {
-        return new AtomFactory(modMod(this.mod));
+    extend<MArgs extends any[], MReturn extends AtomReturn, MScope>(modMod: AtomModMod): AtomFactory<MArgs, MReturn, MScope> {
+        return new AtomFactory(modMod.extend(this.mod));
     }
 }

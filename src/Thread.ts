@@ -1,8 +1,8 @@
-import {Atom, SyncReturn} from "./Atom";
+import {Atom, SyncReturn, AsyncReturn, AtomReturn} from "./Atom";
 import { ThreadHash } from "./ThreadHash";
 
-type Result<Main, ReturnValue> = (
-    Main extends Atom<SyncReturn> ?
+type Result<Return, ReturnValue> = (
+    Return extends SyncReturn ?
     {value: ReturnValue, done: boolean} :
     Promise<{value: ReturnValue, done: boolean}>
 );
@@ -17,17 +17,19 @@ class ThreadNode {
     }
 }
 
-export class Thread<Main = Atom, ReturnValue = any> {
+export class Thread<Return extends AtomReturn = SyncReturn, ReturnValue = any> {
     hash: ThreadHash;
     frame: ThreadNode;
     origin: ThreadNode;
-    back: Pick<Thread<Main, ReturnValue>, 'hash' | 'frame' | 'origin' | 'back'>;
+    back: Pick<Thread<Return, ReturnValue>, 'hash' | 'frame' | 'origin' | 'back'>;
 
-    constructor(main: Main, input: any) {
+    constructor(main: Atom<Return>, input: any) {
 
     }
 
-    answer(): Result<Main, ReturnValue> {}
+    answer(): Result<Return, ReturnValue> {
+        return null;
+    }
 
     ifThen(then: Atom) {
         this.frame.next = new ThreadNode(then, this.frame.next);
