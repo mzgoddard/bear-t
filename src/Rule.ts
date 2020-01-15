@@ -119,7 +119,7 @@ class Scope {
 
     constructor(atom: Atom);
     constructor(atom: Atom, parent: Scope);
-    constructor(rule: Rule, values: any[], parent: Scope);
+    constructor(atom: Atom, values: any[], parent: Scope);
     constructor() {
 
     }
@@ -158,13 +158,14 @@ class Scope {
     }
 
     clone() {
-        return new Scope(this.rule, this.values.slice(), this.parent);
+        return new Scope(this.caller, this.values.slice(), this.parent);
     }
 
     pop() {
         const parent = this.parent.clone();
         const caller = this.caller;
-        for (let i = 0; i < )
-        parent.set
+        for (let i = 0; i < caller.members.length; i++) {
+            parent.set
+        }
     }
 }
