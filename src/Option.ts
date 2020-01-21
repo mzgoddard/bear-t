@@ -5,16 +5,40 @@ enum PotEnum {
     Promise
 }
 
-class Pot<V> {
+type Potable<V> = Promise<Pot<V> | V> | Pot<V> | V;
+
+type PotIs<Value = unknown, Type = PotEnum> = {
+    readonly value: Value;
+    readonly type: Type;
+};
+
+type PotNone = PotIs<null, PotEnum.None> & {
+    map<S>(isSome?: () => never, isNone?: () => Potable<S>, isError?: () => never): Pot<S>;
+    unwrap(): null;
+};
+type PotError = PotIs<Error, PotEnum.Error> & {
+    map<S>(isSome?: () => never, isNone?: () => never, isError?: (err: Error) => Potable<S>): Pot<S>;
+    unwrap(): never;
+};
+type PotSome<V> = PotIs<V, PotEnum.Some> & {
+    map<S>(isSome?: (some: V) => Potable<S>, isNone?: () => never, isError?: () => never): Pot<S>;
+    unwrap(): V;
+};
+type PotPromise<V> = PotIs<Promise<Pot<V>>, PotEnum.Promise> & {
+    map<S>(isSome?: (some: V) => Potable<S>, isNone?: () => Potable<S>, isError?: (err: Error) => Potable<S>): Pot<S>;
+    unwrap(): Promise<V>;
+};
+
+export default class Pot<V> {
     readonly value: unknown;
     readonly type: PotEnum;
 
+    constructor(value: null);
+    constructor(value: Error);
     constructor(value: Promise<null>);
     constructor(value: Promise<Error>);
     constructor(value: Promise<Pot<V>>);
     constructor(value: Promise<V>);
-    constructor(value: null);
-    constructor(value: Error);
     constructor(value: Pot<V>);
     constructor(value: V);
     constructor(value: Promise<null | Error | Pot<V> | V> | null | Error | Pot<V> | V);
@@ -35,38 +59,45 @@ class Pot<V> {
             this.type = PotEnum.None;
         }
     }
-    isNone(): this is {value: null, type: PotEnum.None} {
+    isNone(): this is PotNone {
         return this.type === PotEnum.None;
     }
-    isError(): this is {value: Error, type: PotEnum.Error} {
+    isError(): this is PotError {
         return this.type === PotEnum.Error;
     }
-    isSome(): this is {value: V, type: PotEnum.Some} {
+    isSome(): this is PotSome<V> {
         return this.type === PotEnum.Some;
     }
-    isPromise(): this is {value: Promise<Pot<V>>, type: PotEnum.Promise} {
+    isPromise(): this is PotPromise<V> {
         return this.type === PotEnum.Promise;
     }
-    map<S>(isSome: (value: V) => S, isNone: () => S, isError: (e: Error) => S): Pot<S> {
+    map<S>(isSome: (value: V) => Potable<S> = null, isNone: () => Potable<S> = null, isError: (e: Error) => Potable<S> = null): Pot<S> {
         try {
             if (this.isPromise()) {
                 return new Pot(this.value.then(pot => pot.map(isSome, isNone, isError), Pot.error));
             } else if (this.isSome() && isSome) {
-                return new Pot(isSome(this.value));
+                return new Pot<S>(isSome(this.value));
             } else if (this.isError() && isError) {
-                return new Pot(isError(this.value));
+                return new Pot<S>(isError(this.value));
             } else if (this.isNone() && isNone) {
-                return new Pot(isNone());
+                return new Pot<S>(isNone());
             }
         } catch (err) {
             return Pot.error(err);
         }
         return Pot.none();
     }
+    unwrap(): Promise<V> | V {
+        if (this.isPromise()) return this.value.then(pot => pot.unwrap());
+        else if (this.isSome()) return this.value;
+        else if (this.isError()) throw this.value;
+        return null;
+    }
     static create<V>(value: Promise<null>): Pot<null>;
     static create<V>(value: Promise<Error>): Pot<null>;
     static create<V>(value: Promise<Pot<V>>): Pot<V>;
     static create<V>(value: Promise<V>): Pot<V>;
+    static create<V>(value: Promise<V> | V): Pot<V>;
     static create(value: null): Pot<null>;
     static create(value: Error): Pot<null>;
     static create<V>(value: Pot<V>): Pot<V>;
@@ -97,3 +128,5 @@ class Pot<V> {
         return new Pot(null);
     }
 }
+
+export const pot = Pot.create;

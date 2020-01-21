@@ -1,3 +1,5 @@
+import Pot from './Option';
+
 // Arg, Value, Atom, Scope, Frame, Thread
 
 type SyncReturn = boolean | void;
@@ -36,7 +38,16 @@ function arg<Name extends string | Arg, Type>(name: Name, make: new () => Type =
 
 type SimpleType<Type> = Type extends Boolean ? boolean : Type extends String ? string : Type extends Number ? number : Type;
 type ScopedArg<A> = A extends Arg<any, infer Type> ? {value: SimpleType<Type>} : A;
-type RuleFuncArgs<Args extends any[]> = {[key in keyof Args]: ScopedArg<Args[key]>} & Args[keyof Args][];
+type RuleFuncArgs<Args extends any[]> = (
+    Args extends [] ? [] :
+    Args extends [any] ? [ScopedArg<Args[0]>] :
+    Args extends [any, any] ? [ScopedArg<Args[0]>, ScopedArg<Args[1]>] :
+    Args extends [any, any, any] ? [ScopedArg<Args[0]>, ScopedArg<Args[1]>, ScopedArg<Args[2]>] :
+    Args extends [any, any, any, any] ? [ScopedArg<Args[0]>, ScopedArg<Args[1]>, ScopedArg<Args[2]>, ScopedArg<Args[3]>] :
+    Args extends [any, any, any, any, any] ? [ScopedArg<Args[0]>, ScopedArg<Args[1]>, ScopedArg<Args[2]>, ScopedArg<Args[3]>, ScopedArg<Args[4]>] :
+    ScopedArg<Args[Extract<keyof Args, number>]>[]
+);
+// {[key in Extract<keyof Args, number>]: ScopedArg<Args[key]>} & Args[keyof Args][];
 
 type RuleFunc<Args extends TupleOf<Arg> = Arg[], Return extends AnyReturn = AnyReturn> = (thread: Thread, ...args: RuleFuncArgs<Args>) => Return;
 
@@ -66,7 +77,7 @@ type ValueTupleFrom<Args extends TupleOf<any>> = (
 
 type RuleFuncReturn<Func> = Func extends RuleFunc<any, infer Return> ? Return : AnyReturn;
 
-type Rule<Args extends TupleOf<Arg> = Arg[], Body extends Atom | RuleFunc<Args, any> = any, Return extends AnyReturn = RuleFuncReturn<Body>> = {
+type Rule<Args extends TupleOf<Arg> = Arg[], Body extends Atom | RuleFunc<Args> = Atom | RuleFunc<Args>, Return extends AnyReturn = RuleFuncReturn<Body>> = {
     (...args: AtomMembers<AtomTarget<Args>>): Atom<AtomTarget<Args>>;
     // (): 
     // (...args): Promise<Values<{[key in Extract<keyof Args, number>]: Args[key] extends Arg<infer Name, infer Type> ? {[key in Name]: Type} : any}>>;
@@ -94,14 +105,14 @@ const rule = <CArgs extends TupleOf<string | Arg>, Args extends ArgTupleFrom<CAr
 const a = Arg.any;
 const b = Arg.type(Boolean);
 const n = Arg.type(Number);
-
+  
 rule(['a'], (t, a) => {}).args;
 rule([arg('a')], (t, a) => {}).args;
 rule([arg('a', Boolean), arg('b', Number)], (t, a, b) => {b.value = Number(a.value)}).args;
 rule([b('a'), n('b')], (t, a, b) => {b.value = Number(a.value)}).args;
 rule([arg('a', Boolean), arg('b', Number)], (t, a, b) => {}).args;
 const am = rule([arg('a', Boolean), arg('b', Number)], (t, a, b) => {});
-const am1 = am('a', 'b');
+const am1 = am(a('a'), a('b'));
 
 type tm1 = Parameters<typeof am>;
 
@@ -116,7 +127,7 @@ rule(lll([arg('a', Boolean), arg('b', Number)]), (t, a, b) => {}).args;
 
 type TupleN<T, N extends number> = (N extends 0 ? [] : N extends 1 ? [T] : N extends 2 ? [T, T] : N extends 3 ? [T, T, T] : N extends 4 ? [T, T, T, T] : T[]);
 
-type AtomMembers<R extends AtomTarget> = R extends AtomTarget<infer Args> ? TupleN<(string | Arg | Atom), R extends AtomTarget<infer Args> ? Args['length'] : number>;
+type AtomMembers<AT extends AtomTarget> = AT extends AtomTarget<infer Args> ? ValueTupleFrom<Args> : never;
 
 type Values<V> = V[keyof V];
 
@@ -128,17 +139,40 @@ type AtomTarget<Args extends TupleOf<Arg> = Arg[]> = {
 class Atom<AT extends AtomTarget = AtomTarget, M extends AtomMembers<AT> = AtomMembers<AT>> {
     target: AT;
     members: M;
+
+    constructor(target: AT, members: M) {
+        this.target = target;
+        this.members = members;
+    }
+
+    and(then: Atom) {
+        return and(this, then);
+    }
+
+    or(otherwise: Atom) {
+        return or(this, otherwise);
+    }
 }
 
 const atom = <AT extends AtomTarget>(target: AT, ...members: AtomMembers<AT>) => {
     return Object.assign(() => ({}), {target: target, members} as Atom<AT, AtomMembers<AT>>);
 };
 
+const tm = Arg.type(Atom as new () => Atom);
+
+const and = rule([tm('a'), tm('b')], (t, a, b) => (t.ifTrue(b.value), t.ifTrue(a.value)));
+const or = rule([tm('a'), tm('b')], (t, a, b) => (t.ifFalse(b.value), t.ifTrue(a.value)));
+
 atom(rule([], () => {}));
 atom(rule(['a'], () => {}), arg('a'));
 rule([], atom(rule(['a'], () => {}), arg('a')));
 rule([], atom(rule(['a'], () => {}), 'a'));
 atom(rule(['a'], () => {}), 'b')
+
+const trued = rule([], () => true)();
+const falsed = rule([], () => false)();
+
+and(trued, falsed);
 
 class Scope {
     caller: Atom;
@@ -165,7 +199,10 @@ class Scope {
     get<T>(key: Arg<any, T>): SimpleType<T>;
     get(key: Arg): any;
     get(key: string | Arg) {
-        if (key instanceof Arg) return this.get(key.name);
+        if (key instanceof Arg) {
+            if (key.ruleIndex === -1) return this.get(key.name);
+            return this.getAt(key.ruleIndex);
+        }
         return this.getAt(this.findIndex(a => a.name === key));
     }
 
@@ -173,11 +210,18 @@ class Scope {
         return this.values[index];
     }
 
+    getAll<T = any>(keys: (string | Arg<any, T>)[]): SimpleType<T>[] {
+        return keys.map(this.get, this);
+    }
+
     set(key: string, value: any): void;
     set<T>(key: Arg<any, T>, value: SimpleType<T>): void;
     set(key: Arg, value: any): void;
     set(key: string | Arg, value: any) {
-        if (key instanceof Arg) return this.set(key.name, value);
+        if (key instanceof Arg) {
+            if (key.ruleIndex === -1) return this.set(key.name, value);
+            return this.setAt(key.ruleIndex, value);
+        }
         this.setAt(this.findIndex(a => a.name === key), value);
     }
 
@@ -199,16 +243,33 @@ class Scope {
     //     return atom.rule.body(thread, ...atom.members.map(member => member instanceof Arg ? {value: this.values[member.ruleIndex]} : member));
     // }
 
-    args(atom: Atom) {
-        return atom.members.map(member => {
-            return {value: () => {
-            if (member instanceof Arg) {
-                return this.get(member);
-            } else {
-                return member;
-            }
-            }};
-        });
+    private scopeArg(member) {
+        const scope = this;
+        if (member instanceof Arg) {
+            return {
+                get value() {
+                    return scope.get(member);
+                },
+                set value(value) {
+                    scope.set(member, value);
+                },
+            };
+        } else {
+            return {
+                get value() {return member;}
+            };
+        }
+    }
+
+    args<Args extends TupleOf<Arg>>(atom: Atom<AtomTarget<Args>>): TupleOf<{value: any}> {
+        const {members} = atom;
+        // if (members.length === 0) return [];
+        // else if (members.length === 1) return [this.scopeArg(members[0])];
+        // else if (members.length === 2) return [this.scopeArg(members[0]), this.scopeArg(members[1])];
+        // else if (members.length === 3) return [this.scopeArg(members[0]), this.scopeArg(members[1]), this.scopeArg(members[2])];
+        // else if (members.length === 4) return [this.scopeArg(members[0]), this.scopeArg(members[1]), this.scopeArg(members[2]), this.scopeArg(members[3])];
+        // else if (members.length === 5) return [this.scopeArg(members[0]), this.scopeArg(members[1]), this.scopeArg(members[2]), this.scopeArg(members[3]), this.scopeArg(members[4])];
+        return (members as any[]).map(this.scopeArg, this);
     }
 
     clone() {
@@ -257,7 +318,7 @@ const popScope = rule([], t => {
     t.scope = t.scope.pop();
 })();
 
-class Thread<Return extends SyncReturn | AsyncReturn = any> {
+class Thread<Return extends AnyReturn = AnyReturn> {
     scope: Scope;
     frame: Frame;
     history: Pick<Thread<Return>, 'scope' | 'frame' | 'history'>;
@@ -298,24 +359,44 @@ class Thread<Return extends SyncReturn | AsyncReturn = any> {
         this.history = this.history.history;
     }
 
-    call() {
-        const {target: rule} = this.frame.atom;
+    call(): Promise<boolean> | boolean {
+        const {target} = this.frame.atom;
+        const rule = (target as any) as Rule;
         if (rule.body instanceof Atom) {
             this.ifTrue(popScope);
             this.ifTrue(rule.body);
             this.scope = this.scope.push(rule.body);
+            return true;
         } else {
-            const body: RuleFunc = rule.body;
-            body(this, ...this.scope.args(this.frame.atom));
+            const body = rule.body;
+            return Pot.create(body(this, ...this.scope.args(this.frame.atom)))
+            .map(Boolean, () => false)
+            .unwrap();
         }
-        this.frame.atom.target.body()
     }
 
-    answer(): Promise<{}> {
-        if (!this.frame) this.false();
-        while (this.frame) {
-            if (this.call() === false) this.false();
-            else this.true();
+    loop(): Pot<boolean> {
+        if (this.frame) {
+            return Pot.create(this.call())
+            .map(truthy => {
+                if (truthy === false) this.false();
+                else this.true();
+
+                if (this.frame) return this.loop();
+                return truthy;
+            });
         }
+        return Pot.create(false);
+    }
+
+    answer() {
+        if (!this.frame) this.false();
+        return this.loop()
+        .map(value => value ? this.scope.getAll(this.scope.caller.members) : null)
+        .unwrap();
+        // while (this.frame) {
+        //     if (this.call() === false) this.false();
+        //     else this.true();
+        // }
     }
 }
