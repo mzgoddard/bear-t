@@ -6,7 +6,7 @@ type SyncReturn = boolean | void;
 type AsyncReturn = Promise<SyncReturn>;
 type AnyReturn = SyncReturn | AsyncReturn;
 
-class Arg<Name extends string = string, Type = any> {
+export class Arg<Name extends string = string, Type = any> {
     name: Name;
     make: new () => Type;
     ruleIndex: number = -1;
@@ -29,10 +29,10 @@ class Arg<Name extends string = string, Type = any> {
     }
 }
 
-function arg<Name extends string, Type>(name: Name, make?: new () => Type): Arg<Name, Type>;
-function arg<Name extends Arg>(name: Name): Name;
-function arg<Name extends string | Arg, Type>(name: Name, make?: new () => Type): Name extends string ? Arg<Name, Type> : Name extends Arg<infer N, infer T> ? Arg<N, T> : Arg;
-function arg<Name extends string | Arg, Type>(name: Name, make: new () => Type = null) {
+export function arg<Name extends string, Type>(name: Name, make?: new () => Type): Arg<Name, Type>;
+export function arg<Name extends Arg>(name: Name): Name;
+export function arg<Name extends string | Arg, Type>(name: Name, make?: new () => Type): Name extends string ? Arg<Name, Type> : Name extends Arg<infer N, infer T> ? Arg<N, T> : Arg;
+export function arg<Name extends string | Arg, Type>(name: Name, make: new () => Type = null) {
     return typeof name === 'string' ? new Arg(name, make) : name;
 }
 
@@ -74,11 +74,15 @@ type ValueTupleFrom<Args extends TupleOf<any>> = (
     Args extends [any, any, any, any, any] ? [ValueArg<Args[0]>, ValueArg<Args[1]>, ValueArg<Args[2]>, ValueArg<Args[3]>, ValueArg<Args[4]>] :
     ValueArg<Args[Extract<keyof Args, number>]>[]
 );
-
+const f = (a: 1) => a;
+type f = Parameters<typeof f>;
+type f0 = f[0];
+const g: (...args: f) => f[0] = a => a;
+const h: (...args: {[key in 'abc']: string} & any[]) => boolean = () => false;
 type RuleFuncReturn<Func> = Func extends RuleFunc<any, infer Return> ? Return : AnyReturn;
 
 type Rule<Args extends TupleOf<Arg> = Arg[], Body extends Atom | RuleFunc<Args> = Atom | RuleFunc<Args>, Return extends AnyReturn = RuleFuncReturn<Body>> = {
-    (...args: AtomMembers<AtomTarget<Args>>): Atom<AtomTarget<Args>>;
+    (...args: AtomMembers<AtomTarget<Args, Return>>): Atom<AtomTarget<Args, Return>>;
     // (): 
     // (...args): Promise<Values<{[key in Extract<keyof Args, number>]: Args[key] extends Arg<infer Name, infer Type> ? {[key in Name]: Type} : any}>>;
     args: Args & Arg[];
@@ -88,7 +92,7 @@ type Rule<Args extends TupleOf<Arg> = Arg[], Body extends Atom | RuleFunc<Args> 
 
 type RuleBody<Args extends TupleOf<Arg>, Return extends SyncReturn | AsyncReturn> = Atom | RuleFunc<Args, Return>;
 
-const rule = <CArgs extends TupleOf<string | Arg>, Args extends ArgTupleFrom<CArgs>, Body extends RuleBody<Args, any>, Return extends SyncReturn | AsyncReturn = Body extends RuleFunc<any, infer R> ? R : any>(args: CArgs, body: Body): Rule<Args, Body, Return> => {
+export const rule = <CArgs extends TupleOf<string | Arg>, Args extends ArgTupleFrom<CArgs>, Body extends RuleBody<Args, any>, Return extends SyncReturn | AsyncReturn = Body extends RuleFunc<any, infer R> ? R : any>(args: CArgs, body: Body): Rule<Args, Body, Return> => {
     const r: Rule<Args, Body, Return> = Object.assign((...args: AtomMembers<AtomTarget<Args>>) => atom(r, ...args), {
         args: (args as (string | Arg)[]).map(carg => {
             if (typeof carg === 'string') {
@@ -131,10 +135,13 @@ type AtomMembers<AT extends AtomTarget> = AT extends AtomTarget<infer Args> ? Va
 
 type Values<V> = V[keyof V];
 
-type AtomTarget<Args extends TupleOf<Arg> = Arg[]> = {
+type AtomTarget<Args extends TupleOf<Arg> = Arg[], Return extends AnyReturn = AnyReturn> = {
     args: Args & Arg[];
     locals: Arg[];
 };
+
+type MergeReturn<A, B> = A extends Promise<infer RA> ? B extends Promise<infer RB> ? Promise<RA & RB> : Promise<RA & B> : B extends Promise<infer RB> ? Promise<A & RB> : A & B;
+type MergeAtom<A extends Atom, B extends Atom> = A extends Atom<AtomTarget<any, infer AReturn>> ? B extends Atom<AtomTarget<any, infer BReturn>> ? Atom<AtomTarget<any[], MergeReturn<AReturn, BReturn>>> : never : never;
 
 class Atom<AT extends AtomTarget = AtomTarget, M extends AtomMembers<AT> = AtomMembers<AT>> {
     target: AT;
@@ -145,11 +152,11 @@ class Atom<AT extends AtomTarget = AtomTarget, M extends AtomMembers<AT> = AtomM
         this.members = members;
     }
 
-    and(then: Atom) {
+    and<Then extends Atom>(then: Then): MergeAtom<this, Then> {
         return and(this, then);
     }
 
-    or(otherwise: Atom) {
+    or<Other extends Atom>(otherwise: Other) {
         return or(this, otherwise);
     }
 }
@@ -173,6 +180,7 @@ const trued = rule([], () => true)();
 const falsed = rule([], () => false)();
 
 and(trued, falsed);
+trued.and(falsed);
 
 class Scope {
     caller: Atom;
