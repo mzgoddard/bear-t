@@ -161,6 +161,11 @@ class Atom<AT extends AtomTarget = AtomTarget, M extends AtomMembers<AT> = AtomM
     }
 }
 
+class ControlAtom {
+    next: Atom;
+    choice: ControlAtom;
+}
+
 const atom = <AT extends AtomTarget>(target: AT, ...members: AtomMembers<AT>) => {
     return Object.assign(() => ({}), {target: target, members} as Atom<AT, AtomMembers<AT>>);
 };
