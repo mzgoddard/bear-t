@@ -57,7 +57,7 @@ class Statement implements Operation {
             if (value === false) {
                 thread.direction = -1;
             } else {
-                thread.frame.instruction += 1;
+                thread.node.frame.instruction += 1;
             }
         });
     };
@@ -184,28 +184,31 @@ class Frame {
     }
 
     lastWrite() {
-        return this.writes === null ? new Write(Number.MAX_SAFE_INTEGER, -1, null) : this.writes[this.writes.length - 1];
+        return this.writes === null ? new Write(Number.MIN_SAFE_INTEGER, -1, null) : this.writes[this.writes.length - 1];
     }
 }
 
-class  Thread {
+class FrameNode {
     frame: Frame;
-    direction: -1 | 1 = 1;
+    caller: FrameNode;
+    next: FrameNode;
+}
+
+class Thread {
+    node: FrameNode;
+    direction: -1 | 0 | 1 = 1;
     _answer = null;
 
     step(): Pot<any> {
-        let job: Pot<void> | void;
-        if (this.direction === 1) job = this.frame.down(this);
-        else job = this.frame.up(this);
-
-        return Pot.create(job).map(() => {
-            if (this._answer === null) this.step();
-            else this._answer;
-        });
+        if (this.direction === 1) {
+            return Pot.create(this.node.frame.down(this)).map(() => this.step());
+        } else if (this.direction === -1) {
+            return Pot.create(this.node.frame.up(this)).map(() => this.step());
+        } else return Pot.create(this._answer);
     }
 
     answer(): Pot<any> {
-        if (Array.isArray(this._answer) && this._answer.length === 0) return Pot.create(this._answer);
+        if (this.direction === 0 && this._answer.length === 0) return Pot.create(this._answer);
         this._answer = null;
         return this.step();
     }
