@@ -93,16 +93,18 @@ export default class Pot<V> {
         else if (this.isError()) throw this.value;
         return null;
     }
+    static create<V>(value: Pot<V>): Pot<V>;
+    static create<V>(value: Pot<V> | V): Pot<V>;
     static create<V>(value: Promise<null>): Pot<null>;
     static create<V>(value: Promise<Error>): Pot<null>;
     static create<V>(value: Promise<Pot<V>>): Pot<V>;
+    static create<V>(value: Promise<Pot<V> | V>): Pot<V>;
     static create<V>(value: Promise<V>): Pot<V>;
     static create<V>(value: Promise<V> | V): Pot<V>;
     static create(value: null): Pot<null>;
     static create(value: Error): Pot<null>;
-    static create<V>(value: Pot<V>): Pot<V>;
-    static create<V>(value: V): Pot<V>;
     static create<V>(value: Promise<null | Error | Pot<V> | V> | null | Error | Pot<V> | V): Pot<V>;
+    static create<V>(value: V): Pot<V>;
     static create<V>(value: Promise<null | Error | Pot<V> | V> | null | Error | Pot<V> | V): Pot<V> {
         if (value instanceof Error) {
             return Pot.error(value);
