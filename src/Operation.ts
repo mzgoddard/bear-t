@@ -1,5 +1,4 @@
 import Pot from './Option';
-import { write } from 'fs';
 
 type Primitive<Type> = (
     Type extends Boolean ? boolean :
@@ -12,8 +11,15 @@ type Primitive<Type> = (
 class Arg<Name extends string = string, Type = any> {
     readonly name: Name;
     readonly type: new () => Type;
-    scopeIndex: number;
+    scopeIndex: number = -1;
+
+    constructor(name: Name, type: new () => Type) {
+        this.name = name;
+        this.type = type;
+    }
 }
+
+const arg = <Name extends string, Type>(name: Name, type: new () => Type = null) => new Arg(name, type);
 
 interface Write {
     readonly instruction: number;
@@ -82,15 +88,105 @@ interface Operation {
     up: (thread: Thread) => Pot<void> | void;
 }
 
-type AtomArgs = {};
+type AtomArg = Arg | Atom | boolean | number | string | symbol;
 
-class Atom {}
+type AtomArgs = AtomArg[];
 
-interface Rule {
-    args: Arg[];
-    scope: Arg[];
-    operations: Operation[];
+type AtomTarget = {};
+
+class Atom {
+    rule: Rule;
+    args: AtomArgs;
 }
+
+enum RuleType {
+    JS = 'JS',
+    Atom = 'ATOM',
+    Primitive = 'PRIMITIVE',
+}
+
+interface RuleBase {
+    (...args: AtomArgs): Atom;
+    readonly args: Arg[];
+}
+
+interface JSRule extends RuleBase {
+    readonly type: RuleType.JS;
+}
+
+interface AtomRule extends RuleBase {
+    readonly type: RuleType.Atom;
+}
+
+type PrimitiveName = 'and' | 'or' | 'cut';
+
+interface PrimitiveRule extends RuleBase {
+    readonly type: RuleType.Primitive;
+    readonly primitive: PrimitiveName;
+}
+
+type Rule = JSRule | AtomRule | PrimitiveRule;
+
+type JSBody<Addresses extends Addr[]> = (...args: Addresses) => Promise<boolean | void> | boolean | void;
+
+type ArgAddress<A> = A extends Arg<string, infer Type> ? Addr<Type> : A;
+
+type ArgAddresses<Args extends Arg[]> = {[key in keyof Args]: ArgAddress<Args[key]>};
+
+const jsrule = <Args extends Arg[], Body extends JSBody<ArgAddresses<Args>>>(args: Args, body: Body): JSRule => {
+    return Object.assign((...atomArgs) => new Atom(), {
+        type: RuleType.JS as const,
+        args,
+        body,
+    });
+};
+
+const compile = (atom: Atom, scope = {}) => {
+    const operations = [];
+
+    if (atom.rule.type === RuleType.JS) {
+
+    } else if (atom.rule.type === RuleType.Atom) {
+
+    } else if (atom.rule.type === RuleType.Primitive) {
+        switch (atom.rule.primitive) {
+            case 'and':
+                if (atom.args[0] instanceof Atom) {
+                    operations.push(...compile(atom.args[0], scope).operations);
+                } else if (atom.args[1] instanceof Arg) {
+                    
+                } else {
+
+                }
+            break;
+            default:
+            throw new Error('Unknown primitive atom. ' + atom.rule.name);
+        }
+    }
+};
+
+const rule = <Args extends Arg[], Body extends Atom>(args: Args, body: Body): AtomRule => {
+    const {scope, operations} = compile(body);
+    return Object.assign((...atomArgs) => new Atom(), {
+        type: RuleType.Atom as const,
+        args,
+        body,
+        scope,
+        operations,
+    });
+};
+
+const primRule = <Args extends Arg[], Prim extends PrimitiveName>(args: Args, primitive: Prim): PrimitiveRule => {
+    return Object.assign((...atomArgs) => new Atom(), {
+        type: RuleType.Primitive as const,
+        args,
+        primitive,
+    });
+};
+
+const and = primRule([arg('left', Atom), arg('right', Atom)], 'and');
+const or = primRule([arg('left', Atom), arg('right', Atom)], 'or');
+const cut = primRule([], 'cut');
 
 class IndexMemo<Input, Output> {
     cache: Output[] = [];
@@ -111,13 +207,13 @@ class IndexMemo<Input, Output> {
 }
 
 class Frame {
-    readonly rule: Rule;
+    readonly rule: RuleBase;
     instruction: number = 0;
 
     scope: Address[];
     writes: WriteStack = null;
 
-    constructor(rule: Rule) {
+    constructor(rule: RuleBase) {
         this.rule = rule;
 
         this.scope = [];
@@ -250,10 +346,10 @@ class Thread {
     }
 
     lockActive(guard: () => Pot<void> | void): Pot<void> {
-        const lastCurrent = activeThread;
+        const lastActive = activeThread;
         activeThread = this;
         const result = Pot.create(guard());
-        activeThread = lastCurrent;
+        activeThread = lastActive;
         return result;
     }
 
@@ -287,7 +383,7 @@ class Thread {
 }
 
 class Call implements Operation {
-    rule: Rule;
+    rule: RuleBase;
     args: (Arg | Atom | boolean | number | string | symbol)[];
 
     down(thread: Thread) {
