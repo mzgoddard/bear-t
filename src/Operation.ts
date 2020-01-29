@@ -112,10 +112,13 @@ interface RuleBase {
 
 interface JSRule extends RuleBase {
     readonly type: RuleType.JS;
+    args: Arg[],
+    body: JSBody<ArgAddresses<Arg[]>>,
 }
 
 interface AtomRule extends RuleBase {
     readonly type: RuleType.Atom;
+    operations: Operation[];
 }
 
 type PrimitiveName = 'and' | 'or' | 'cut';
@@ -141,28 +144,52 @@ const jsrule = <Args extends Arg[], Body extends JSBody<ArgAddresses<Args>>>(arg
     });
 };
 
+const compilePrimArm = (arm: AtomArg, scope) => {
+    if (arm instanceof Atom) {
+        return compile(arm, scope);
+    } else if (arm instanceof Arg) {
+        // operations.push(...compile(arm, scope).operations);
+    } else {
+        // operations.push(...compile(arm, scope).operations);
+    }
+};
+
 const compile = (atom: Atom, scope = {}) => {
-    const operations = [];
+    const operations = [] as Operation[];
 
     if (atom.rule.type === RuleType.JS) {
-
+        const call = new JSCall(atom.rule.args, atom.rule.body);
+        operations.push(call);
     } else if (atom.rule.type === RuleType.Atom) {
-
+        const call = new Call();
+        operations.push(call);
     } else if (atom.rule.type === RuleType.Primitive) {
         switch (atom.rule.primitive) {
             case 'and':
-                if (atom.args[0] instanceof Atom) {
-                    operations.push(...compile(atom.args[0], scope).operations);
-                } else if (atom.args[1] instanceof Arg) {
-                    
-                } else {
-
-                }
-            break;
+                operations.push(...compilePrimArm(atom.args[0], scope).operations);
+                operations.push(...compilePrimArm(atom.args[1], scope).operations);
+                break;
+            case 'or':
+                const branchOp = new Branch();
+                const branchElse = new BranchElse();
+                const index = operations.length;
+                operations.push(branchOp);
+                operations.push(...compilePrimArm(atom.args[0], scope).operations);
+                const indexElse = operations.length;
+                branchOp.else = indexElse - index;
+                branchElse.branch = index - indexElse;
+                operations.push(branchElse);
+                operations.push(...compilePrimArm(atom.args[1], scope).operations);
+                break;
+            case 'cut':
+                operations.push(new Cut());
+                break;
             default:
             throw new Error('Unknown primitive atom. ' + atom.rule.name);
         }
     }
+
+    return {scope, operations};
 };
 
 const rule = <Args extends Arg[], Body extends Atom>(args: Args, body: Body): AtomRule => {
@@ -172,7 +199,7 @@ const rule = <Args extends Arg[], Body extends Atom>(args: Args, body: Body): At
         args,
         body,
         scope,
-        operations,
+        operations: [new CallStart(), ...operations],
     });
 };
 
@@ -207,13 +234,13 @@ class IndexMemo<Input, Output> {
 }
 
 class Frame {
-    readonly rule: RuleBase;
+    readonly rule: AtomRule;
     instruction: number = 0;
 
     scope: Address[];
     writes: WriteStack = null;
 
-    constructor(rule: RuleBase) {
+    constructor(rule: AtomRule) {
         this.rule = rule;
 
         this.scope = [];
@@ -383,7 +410,7 @@ class Thread {
 }
 
 class Call implements Operation {
-    rule: RuleBase;
+    rule: AtomRule;
     args: (Arg | Atom | boolean | number | string | symbol)[];
 
     down(thread: Thread) {
@@ -434,8 +461,13 @@ class Return implements Operation {
 }
 
 class JSCall implements Operation {
-    jsFunc: (...args: Addr[]) => Pot<boolean | void> | boolean | void;
+    jsFunc: (...args: Addr[]) => Promise<boolean | void> | boolean | void;
     args: (Arg | Atom | boolean | number | string | symbol)[];
+
+    constructor(args: JSCall['args'], jsFunc: JSCall['jsFunc']) {
+        this.args = args;
+        this.jsFunc = jsFunc;
+    }
 
     down(thread: Thread) {
         const caller = thread.stack.frame;
@@ -471,7 +503,7 @@ class Branch implements Operation {
     down = null;
     up(thread: Thread) {
         thread.direction = 1;
-        thread.stack.frame.instruction = this.else + 1;
+        thread.stack.frame.instruction += this.else + 1;
     }
 }
 
@@ -480,7 +512,7 @@ class BranchElse implements Operation {
 
     down = null;
     up(thread: Thread) {
-        thread.stack.frame.instruction = this.branch - 1;
+        thread.stack.frame.instruction += this.branch - 1;
     }
 }
 
